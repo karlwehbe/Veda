@@ -619,7 +619,11 @@ export function ChatComposer({
   // Only ever shown when idle (not recording) — Stop is now merged into the
   // Send button, see stopAndSend. Hovering reveals a small popover with the
   // two source choices; clicking either starts recording with that source
-  // immediately. Clicking the button itself (no hover) defaults to mic. The
+  // immediately. The button itself only opens that popover — it is a menu
+  // trigger, not a record shortcut, so a click never starts a recording on
+  // its own (only hovering used to open the menu; a click without a hover
+  // first — touch, or a keyboard Enter/Space on the focused button — used to
+  // fall through to starting a mic recording by default instead). The
   // popover is portaled to document.body (see openSourceMenu/
   // scheduleCloseSourceMenu above) so it renders above everything —
   // including the notes sidebar — instead of being clipped by the chat
@@ -633,9 +637,11 @@ export function ChatComposer({
     >
       <button
         type="button"
-        onClick={() => void handleStartRecording("mic")}
+        onClick={openSourceMenu}
         className={`rounded-full p-2.5 text-[var(--muted)] hover:bg-[var(--hover)] ${FOCUS_RING}`}
-        aria-label="Start recording"
+        aria-label="Choose recording source"
+        aria-haspopup="menu"
+        aria-expanded={showSourceMenu}
         title="Record"
       >
         <AudioLines className="size-5" />

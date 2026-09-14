@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Rebuild + restart the backend after a code change. Never touches the db.
 #   ./redeploy.sh          rebuild api
-#   ./redeploy.sh --worker rebuild the worker too
 #   ./redeploy.sh --logs   follow api logs afterwards
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-WORKER=false; LOGS=false
+LOGS=false
 for a in "$@"; do case "$a" in
-  --worker) WORKER=true ;; --logs) LOGS=true ;;
-  *) echo "Unknown option: $a" >&2; exit 1 ;;
+  --logs) LOGS=true ;;
+  -h|--help) sed -n '2,4p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "Unknown option: $a (try --help)" >&2; exit 1 ;;
 esac; done
 
 docker info >/dev/null 2>&1 || { echo "Docker isn't running"; exit 1; }
@@ -20,7 +20,7 @@ if command -v python3 >/dev/null 2>&1; then
     python3 -m compileall -q server/app; echo "Syntax error above"; exit 1; }
 fi
 
-SERVICES=(api); [ "$WORKER" = true ] && SERVICES+=(worker)
+SERVICES=(api)
 # --no-deps keeps compose from recreating db as a dependency.
 docker compose up -d --build --no-deps "${SERVICES[@]}"
 

@@ -33,13 +33,16 @@ def stub_llm(monkeypatch: pytest.MonkeyPatch):
     ) -> list[dict]:
         calls: list[dict] = []
 
-        async def fake_generate_response(transcript, history, current_note, current_title, settings, db):
+        async def fake_generate_response(
+            transcript, history, current_note, current_title, settings, db, project_id=None
+        ):
             calls.append(
                 {
                     "transcript": transcript,
                     "history": history,
                     "current_note": current_note,
                     "current_title": current_title,
+                    "project_id": project_id,
                 }
             )
             if raises is not None:
@@ -202,6 +205,25 @@ class TestSendMessage:
         conversation = _make_conversation(db)
         client.post(f"/conversations/{conversation.id}/messages", data={"transcript": "the new input"})
         assert calls[0]["history"] == []
+
+    def test_the_conversations_project_reaches_generate_response(
+        self, client: TestClient, db: Session, stub_llm
+    ) -> None:
+        # generate_response resolves the project's own instructions itself
+        # (see notes_graph._project_instructions) — this just confirms the id
+        # it needs to do that is actually passed through from the DB row.
+        from app.models import Project
+
+        project = Project(name="Linear Algebra", type="Course", instructions="")
+        db.add(project)
+        db.commit()
+        db.refresh(project)
+
+        calls = stub_llm()
+        conversation = _make_conversation(db, project_id=project.id)
+        client.post(f"/conversations/{conversation.id}/messages", data={"transcript": "lecture"})
+
+        assert calls[0]["project_id"] == project.id
 
 
 class TestSendMessageRejections:

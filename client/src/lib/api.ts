@@ -18,8 +18,33 @@ export type Message = {
 export type Conversation = {
   id: string
   title: string
+  // null = not in any project — shows in the sidebar's flat "Chats" list.
+  project_id: string | null
   created_at: string
   updated_at: string
+}
+
+// A folder grouping conversations — a course, a research project, a reading
+// group. Flat: a project holds conversations directly and cannot contain
+// other projects. See server/app/api/projects.py.
+export type Project = {
+  id: string
+  name: string
+  type: string
+  // What this project is about, in the user's own words — shown back on
+  // the project page. Descriptive, unlike `instructions` below: never sent
+  // to the writer.
+  description: string
+  // The user's own words, sent to the writer verbatim — same treatment as
+  // the profile's Instructions field. Not private: this is what they typed.
+  instructions: string
+  conversation_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectDetail = Project & {
+  conversations: Conversation[]
 }
 
 export type ConversationDetail = Conversation & {
@@ -80,7 +105,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listConversations: () => request<Conversation[]>("/conversations"),
-  createConversation: () => request<Conversation>("/conversations", { method: "POST" }),
+  // projectId files the new conversation there from creation — the project
+  // page's "New chat" button passes its own id; the sidebar's plain "New
+  // chat" and a recording started from elsewhere omit it (ungrouped).
+  createConversation: (projectId?: string) =>
+    request<Conversation>(
+      `/conversations${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+      { method: "POST" },
+    ),
   getConversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
   deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: "DELETE" }),
   // File upload path — audio bytes only; server batch-transcribes via Deepgram.
@@ -134,4 +166,26 @@ export const api = {
       body: JSON.stringify(input),
     }),
   deleteProfile: () => request<void>("/profile", { method: "DELETE" }),
+
+  listProjects: () => request<Project[]>("/projects"),
+  getProject: (id: string) => request<ProjectDetail>(`/projects/${id}`),
+  createProject: (input: { name: string; type: string; description: string; instructions: string }) =>
+    request<Project>("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  updateProject: (
+    id: string,
+    input: { name: string; type: string; description: string; instructions: string },
+  ) =>
+    request<Project>(`/projects/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  // Destructive: also deletes every conversation filed under this project,
+  // and their notes and messages with them (server-side ON DELETE CASCADE).
+  // The caller is responsible for confirming with the user first.
+  deleteProject: (id: string) => request<void>(`/projects/${id}`, { method: "DELETE" }),
 }

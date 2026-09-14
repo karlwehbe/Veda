@@ -76,6 +76,54 @@ def init_db() -> None:
             text("ALTER TABLE user_profiles DROP COLUMN IF EXISTS is_edited")
         )
 
+        # projects is a wholly new table, created by create_all() above —
+        # this is only the added column + FK on the pre-existing
+        # conversations table. References projects(id), so it has to run
+        # after create_all has had a chance to create that table.
+        conn.execute(
+            text(
+                "ALTER TABLE conversations "
+                "ADD COLUMN IF NOT EXISTS project_id UUID "
+                "REFERENCES projects(id) ON DELETE CASCADE"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_conversations_project_id "
+                "ON conversations (project_id)"
+            )
+        )
+
+        # The FK above was first shipped as ON DELETE SET NULL (deleting a
+        # project orphaned its conversations). Changed to ON DELETE CASCADE —
+        # deleting a project now deletes its conversations too. ADD COLUMN IF
+        # NOT EXISTS is a no-op on a column that already exists, so it never
+        # picks up that change on an already-migrated database; drop and
+        # recreate the constraint explicitly. conversations_project_id_fkey is
+        # Postgres's own default name for a single-statement ALTER TABLE ADD
+        # COLUMN ... REFERENCES, which is how this FK has only ever been
+        # created — never hand-named — so the literal name is safe to assume.
+        conn.execute(
+            text(
+                "ALTER TABLE conversations "
+                "DROP CONSTRAINT IF EXISTS conversations_project_id_fkey"
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE conversations "
+                "ADD CONSTRAINT conversations_project_id_fkey "
+                "FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE"
+            )
+        )
+
+        conn.execute(
+            text(
+                "ALTER TABLE projects "
+                "ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''"
+            )
+        )
+
 
 def check_db_connection() -> bool:
     try:

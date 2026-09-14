@@ -57,9 +57,9 @@ for why that split exists.
 AI-Note-Taker/
 ├── setup.sh              # one-command setup (see below)
 ├── redeploy.sh           # rebuild + restart the backend after a code change
-├── docker-compose.yml    # local dev stack: db + api + worker
+├── docker-compose.yml    # local dev stack: db + api
 ├── docker-compose.test.yml # second stack on :8001 with a stubbed model
-├── Dockerfile            # single image, used by both api and worker services
+├── Dockerfile            # the API image
 ├── .env / .env.example   # shared config, loaded by the server (and by
 │                         # docker-compose.yml to fill in ${VARS})
 ├── FLOW.md               # end-to-end diagrams of every major path
@@ -94,7 +94,6 @@ AI-Note-Taker/
     │   ├── main.py             # creates the app, registers routers, configures logging
     │   ├── config.py           # reads .env into a typed Settings object
     │   ├── db.py               # engine, session, and init_db() schema setup
-    │   ├── worker.py           # background job process stub (heartbeat only)
     │   ├── models/             # SQLAlchemy: Conversation, Message, UserProfile
     │   ├── services/
     │   │   ├── notes_graph.py  # every prompt + the LangGraph state machine
@@ -129,7 +128,7 @@ recording and note generation return errors until they're filled in.
 
 ```bash
 cp .env.example .env      # then fill in DEEPGRAM_API_KEY and OPENAI_API_KEY
-docker compose up --build # db + api + worker
+docker compose up --build # db + api
 ```
 
 ```bash
@@ -248,15 +247,12 @@ jobs: `server` (unit + integration against a `postgres:16` service), `client`
 system and Playwright suites, uploading traces on failure). No deploy step —
 no hosting target chosen yet.
 
-The production image builds from the repo-root [`Dockerfile`](Dockerfile);
-Compose uses the same file for both the `api` and `worker` services.
+The production image builds from the repo-root [`Dockerfile`](Dockerfile).
 
 ## Known gaps
 
 - **No auth.** One profile row, one set of conversations, global to whoever
   opens the page.
-- **The worker is a stub.** It logs a heartbeat on a 30-second loop and does no
-  job processing. It exists so the process split is already in place.
 - **The audio path has no system coverage** — `DEEPGRAM_TRANSCRIPTION_URL` is
   a module constant, so it can't be redirected at a stub the way OpenAI can.
 - **No rate limiting**, and nothing caps the size of a typed message. Fine

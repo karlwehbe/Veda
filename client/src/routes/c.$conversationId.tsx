@@ -11,6 +11,7 @@ import { GeneratingIndicator } from "@/components/generating-indicator"
 import { MessageBubble } from "@/components/message-bubble"
 import { NotesPanel } from "@/components/notes-panel"
 import { api } from "@/lib/api"
+import { useProjectsContext } from "@/lib/projects-context"
 import type { Message } from "@/lib/api"
 
 /** Set when navigating from "/" after the first reply that created notes. */
@@ -46,6 +47,8 @@ function RouteComponent() {
 function ConversationThread() {
   const conversation = Route.useLoaderData()
   const { conversationId } = Route.useParams()
+  const { projects } = useProjectsContext()
+  const project = projects.find((p) => p.id === conversation.project_id)
   const animateFromNav = useRouterState({
     select: (s) =>
       Boolean((s.location.state as ConversationLocationState | undefined)?.animateNotesOpen),
@@ -95,6 +98,11 @@ function ConversationThread() {
     hasScrolledOnceRef.current = true
   }, [messages, generating])
 
+  // No messages yet (eagerly created — e.g. "New chat" from a project page —
+  // and nothing sent or recording yet): same centered hero as "/" instead of
+  // an empty scroll area, until the first send/record engages the thread.
+  const engaged = messages.length > 0 || pendingMessage !== null || generating
+
   return (
     <div className="flex h-full">
       <div className="flex h-full flex-1 flex-col overflow-hidden">
@@ -103,39 +111,56 @@ function ConversationThread() {
             {title}
           </h1>
         </div>
-        <div className="thin-scrollbar flex-1 overflow-y-auto px-6 py-6">
-          <div className="mx-auto w-full max-w-2xl space-y-10">
-            {messages.map((m) => (
-              <MessageBubble
-                key={m.id}
-                message={m}
-                stream={m.id === streamingId}
-                onStreamTick={() => {
-                  bottomRef.current?.scrollIntoView({ behavior: "auto" })
-                }}
-                onStreamDone={() => {
-                  setStreamingId((id) => (id === m.id ? null : id))
-                }}
-              />
-            ))}
-            {pendingMessage ? <MessageBubble message={pendingMessage} /> : null}
-            {generating ? <GeneratingIndicator /> : null}
-            <div ref={bottomRef} />
+        <div className={`flex min-h-0 flex-1 flex-col ${engaged ? "justify-end" : "justify-center"}`}>
+          {engaged ? (
+            <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-6 py-6">
+              <div className="mx-auto w-full max-w-2xl space-y-10">
+                {messages.map((m) => (
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    stream={m.id === streamingId}
+                    onStreamTick={() => {
+                      bottomRef.current?.scrollIntoView({ behavior: "auto" })
+                    }}
+                    onStreamDone={() => {
+                      setStreamingId((id) => (id === m.id ? null : id))
+                    }}
+                  />
+                ))}
+                {pendingMessage ? <MessageBubble message={pendingMessage} /> : null}
+                {generating ? <GeneratingIndicator /> : null}
+                <div ref={bottomRef} />
+              </div>
+            </div>
+          ) : (
+            <div className="mx-auto w-full max-w-3xl shrink-0 space-y-3 px-6 pb-4 text-center">
+              <h1 className="truncate font-heading text-3xl font-medium tracking-tight">
+                {project ? project.name || "Untitled project" : "Start a new lecture"}
+              </h1>
+              <p className="text-base text-[var(--muted)]">
+                Record or upload a clip, and notes will build here as you go.
+              </p>
+            </div>
+          )}
+
+          <div className="shrink-0">
+            <ChatComposer
+              conversationId={conversationId}
+              centered={!engaged}
+              draftTranscript={draftTranscript}
+              onSubmittingChange={setGenerating}
+              onPendingMessage={setPendingMessage}
+              onSent={(turn) => {
+                setMessages((prev) => [...prev, turn.user_message, turn.assistant_message])
+                setNoteContent(turn.note_content)
+                setDraftTranscript(null)
+                if (turn.title) setTitle(turn.title)
+                setStreamingId(turn.assistant_message.id)
+              }}
+            />
           </div>
         </div>
-        <ChatComposer
-          conversationId={conversationId}
-          draftTranscript={draftTranscript}
-          onSubmittingChange={setGenerating}
-          onPendingMessage={setPendingMessage}
-          onSent={(turn) => {
-            setMessages((prev) => [...prev, turn.user_message, turn.assistant_message])
-            setNoteContent(turn.note_content)
-            setDraftTranscript(null)
-            if (turn.title) setTitle(turn.title)
-            setStreamingId(turn.assistant_message.id)
-          }}
-        />
       </div>
 
       {noteContent ? (

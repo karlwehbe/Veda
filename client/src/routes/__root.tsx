@@ -10,23 +10,26 @@ import { createRootRoute, Outlet } from "@tanstack/react-router"
 
 import { Sidebar } from "@/components/sidebar"
 import { ConversationsProvider } from "@/lib/conversations-context"
+import { ProjectsProvider } from "@/lib/projects-context"
 import { RecordingProvider } from "@/lib/recording-context"
 
 export const Route = createRootRoute({
   component: () => (
     <ConversationsProvider>
-      {/* RecordingProvider lives here, above <Outlet />, specifically so a
-          recording survives navigating between routes — it used to live
-          inside ChatComposer, which meant switching conversations mid-
-          recording tore the whole session down. */}
-      <RecordingProvider>
-        <div className="flex h-svh bg-background text-foreground">
-          <Sidebar />
-          <div className="flex-1 overflow-hidden">
-            <Outlet />
+      <ProjectsProvider>
+        {/* RecordingProvider lives here, above <Outlet />, specifically so a
+            recording survives navigating between routes — it used to live
+            inside ChatComposer, which meant switching conversations mid-
+            recording tore the whole session down. */}
+        <RecordingProvider>
+          <div className="flex h-svh bg-background text-foreground">
+            <Sidebar />
+            <div className="flex-1 overflow-hidden">
+              <Outlet />
+            </div>
           </div>
-        </div>
-      </RecordingProvider>
+        </RecordingProvider>
+      </ProjectsProvider>
     </ConversationsProvider>
   ),
 })

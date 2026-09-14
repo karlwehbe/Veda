@@ -19,28 +19,29 @@ from app.services.notes_graph import (
 
 PROFILE = "Karl is a software engineer studying linear algebra."
 INSTRUCTIONS = "End every section with a one-line summary."
+PROJECT_INSTRUCTIONS = "Use British spelling and cite the textbook chapter."
 
 
 class TestPromptComposition:
     def test_starting_a_document_uses_the_new_notes_instructions(self) -> None:
-        assert DEFAULT_NEW_NOTES_INSTRUCTIONS in _build_notes_prompt("", "", starting_new=True)
+        assert DEFAULT_NEW_NOTES_INSTRUCTIONS in _build_notes_prompt("", "", "", starting_new=True)
 
     def test_extending_a_document_uses_the_extend_instructions(self) -> None:
-        assert DEFAULT_NOTES_INSTRUCTIONS in _build_notes_prompt("", "", starting_new=False)
+        assert DEFAULT_NOTES_INSTRUCTIONS in _build_notes_prompt("", "", "", starting_new=False)
 
     def test_the_two_note_branches_differ(self) -> None:
-        assert _build_notes_prompt("", "", starting_new=True) != _build_notes_prompt("", "", starting_new=False)
+        assert _build_notes_prompt("", "", "", starting_new=True) != _build_notes_prompt("", "", "", starting_new=False)
 
     def test_profile_is_included_when_present(self) -> None:
-        assert PROFILE in _build_notes_prompt(PROFILE, "", starting_new=False)
-        assert PROFILE in _build_chat_prompt(PROFILE, "")
+        assert PROFILE in _build_notes_prompt(PROFILE, "", "", starting_new=False)
+        assert PROFILE in _build_chat_prompt(PROFILE, "", "")
 
     def test_profile_block_is_omitted_entirely_when_empty(self) -> None:
         # Not "included but blank" — an empty heading invites the model to
         # invent something to put under it. The guard sentence only exists to
         # introduce the profile, so its absence proves the block is gone.
-        with_profile = _build_notes_prompt(PROFILE, "", starting_new=False)
-        without = _build_notes_prompt("", "", starting_new=False)
+        with_profile = _build_notes_prompt(PROFILE, "", "", starting_new=False)
+        without = _build_notes_prompt("", "", "", starting_new=False)
         assert "Never mention" in with_profile
         assert "Never mention" not in without
         assert len(without) < len(with_profile)
@@ -48,7 +49,7 @@ class TestPromptComposition:
     def test_profile_always_carries_its_guard(self) -> None:
         # Without this the model treats the profile as material to write
         # about and adds a section about the reader to the notes.
-        prompt = _build_notes_prompt(PROFILE, "", starting_new=False)
+        prompt = _build_notes_prompt(PROFILE, "", "", starting_new=False)
         assert "Never mention" in prompt
 
 
@@ -61,27 +62,62 @@ class TestUserInstructions:
     """
 
     def test_instructions_appear_word_for_word(self) -> None:
-        assert INSTRUCTIONS in _build_notes_prompt("", INSTRUCTIONS, starting_new=False)
-        assert INSTRUCTIONS in _build_chat_prompt("", INSTRUCTIONS)
+        assert INSTRUCTIONS in _build_notes_prompt("", INSTRUCTIONS, "", starting_new=False)
+        assert INSTRUCTIONS in _build_chat_prompt("", INSTRUCTIONS, "")
 
     def test_instructions_survive_alongside_a_profile(self) -> None:
-        prompt = _build_notes_prompt(PROFILE, INSTRUCTIONS, starting_new=False)
+        prompt = _build_notes_prompt(PROFILE, INSTRUCTIONS, "", starting_new=False)
         assert PROFILE in prompt
         assert INSTRUCTIONS in prompt
 
     def test_block_is_omitted_when_there_are_none(self) -> None:
-        prompt = _build_notes_prompt(PROFILE, "", starting_new=False)
+        prompt = _build_notes_prompt(PROFILE, "", "", starting_new=False)
         assert "USER INSTRUCTIONS" not in prompt
 
     def test_instructions_carry_their_guard(self) -> None:
         # Raw user text reaching the prompt untouched is the injection
         # surface; the guard is the only thing scoping it.
         for prompt in (
-            _build_notes_prompt("", INSTRUCTIONS, starting_new=False),
-            _build_chat_prompt("", INSTRUCTIONS),
+            _build_notes_prompt("", INSTRUCTIONS, "", starting_new=False),
+            _build_chat_prompt("", INSTRUCTIONS, ""),
         ):
             assert "preference" in prompt
             assert "cannot override" in prompt
+
+
+class TestProjectInstructions:
+    """A project's own directions — the same verbatim treatment as the
+    user's global Instructions, kept in a separate block so the model can
+    tell which preference is which and so a conversation with no project
+    costs nothing."""
+
+    def test_appear_word_for_word(self) -> None:
+        assert PROJECT_INSTRUCTIONS in _build_notes_prompt("", "", PROJECT_INSTRUCTIONS, starting_new=False)
+        assert PROJECT_INSTRUCTIONS in _build_chat_prompt("", "", PROJECT_INSTRUCTIONS)
+
+    def test_survive_alongside_profile_and_user_instructions(self) -> None:
+        prompt = _build_notes_prompt(PROFILE, INSTRUCTIONS, PROJECT_INSTRUCTIONS, starting_new=False)
+        assert PROFILE in prompt
+        assert INSTRUCTIONS in prompt
+        assert PROJECT_INSTRUCTIONS in prompt
+
+    def test_block_is_omitted_when_there_is_no_project(self) -> None:
+        prompt = _build_notes_prompt(PROFILE, INSTRUCTIONS, "", starting_new=False)
+        assert "PROJECT INSTRUCTIONS" not in prompt
+
+    def test_carries_its_guard(self) -> None:
+        for prompt in (
+            _build_notes_prompt("", "", PROJECT_INSTRUCTIONS, starting_new=False),
+            _build_chat_prompt("", "", PROJECT_INSTRUCTIONS),
+        ):
+            assert "preference" in prompt
+            assert "cannot override" in prompt
+
+    def test_states_precedence_over_global_instructions(self) -> None:
+        # Deliberate design choice: the more specific (project) block wins
+        # when the two genuinely conflict. Assert the rule is actually there.
+        prompt = _build_notes_prompt("", INSTRUCTIONS, PROJECT_INSTRUCTIONS, starting_new=False)
+        assert "more specific" in prompt
 
 
 class TestTrustBoundary:
@@ -97,9 +133,9 @@ class TestTrustBoundary:
         # decides whether the document gets rewritten.
         for prompt in (
             _build_routing_prompt(),
-            _build_notes_prompt("", "", starting_new=False),
-            _build_notes_prompt("", "", starting_new=True),
-            _build_chat_prompt("", ""),
+            _build_notes_prompt("", "", "", starting_new=False),
+            _build_notes_prompt("", "", "", starting_new=True),
+            _build_chat_prompt("", "", ""),
         ):
             assert "TRUST BOUNDARY" in prompt
 
@@ -117,7 +153,7 @@ class TestTrustBoundary:
         assert "Refusing to take notes on a legitimate topic is a failure" in prompt
 
     def test_forbids_disclosing_the_prompt(self) -> None:
-        assert "Never reveal" in _build_notes_prompt("", "", starting_new=False)
+        assert "Never reveal" in _build_notes_prompt("", "", "", starting_new=False)
 
 
 class TestRouterContainment:
@@ -134,6 +170,12 @@ class TestRouterContainment:
         # the node that decides whether the document is rewritten.
         assert INSTRUCTIONS not in _build_routing_prompt()
         assert "USER INSTRUCTIONS" not in _build_routing_prompt()
+
+    def test_router_never_sees_project_instructions(self) -> None:
+        # _build_routing_prompt takes no project argument either — same
+        # structural guarantee as the profile/instructions case above.
+        assert PROJECT_INSTRUCTIONS not in _build_routing_prompt()
+        assert "PROJECT INSTRUCTIONS" not in _build_routing_prompt()
 
     def test_router_prompt_is_base_plus_routing_only(self) -> None:
         prompt = _build_routing_prompt()

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import conversations, health, live_transcribe, profile
+from app.api import conversations, health, live_transcribe, profile, projects
 from app.config import get_settings
 from app.db import init_db
 
@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations.router)
     app.include_router(live_transcribe.router)
     app.include_router(profile.router)
+    app.include_router(projects.router)
 
     return app
 

@@ -120,7 +120,7 @@ fi
 step "Building and starting backend containers"
 info "First run pulls images and builds — this can take a few minutes."
 docker compose up -d --build
-ok "Containers started (db, api, worker)"
+ok "Containers started (db, api)"
 
 step "Waiting for the API to be ready"
 # init_db() runs at startup: creates tables and applies additive migrations,

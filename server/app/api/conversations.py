@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import Conversation, Message
+from app.models import Conversation, Message, Project
 from app.services.notes_graph import generate_response
 from app.services.transcription import transcribe_audio
 
@@ -34,6 +34,7 @@ class MessageOut(BaseModel):
 class ConversationOut(BaseModel):
     id: uuid.UUID
     title: str
+    project_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -61,12 +62,21 @@ def _get_conversation_or_404(conversation_id: uuid.UUID, db: Session) -> Convers
 
 
 @router.post("/conversations", response_model=ConversationOut)
-def create_conversation(db: Session = Depends(get_db)) -> Conversation:
-    conversation = Conversation()
+def create_conversation(
+    # Optional: a project's "New chat" button passes its own id so the
+    # conversation is filed there from creation, instead of the flat "Chats"
+    # list. A live recording also creates eagerly (before any transcript
+    # exists) via this same endpoint, so the query param has to cover both.
+    project_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+) -> Conversation:
+    if project_id is not None and db.get(Project, project_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    conversation = Conversation(project_id=project_id)
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
-    logger.info("[%s] conversation created", conversation.id)
+    logger.info("[%s] conversation created (project=%s)", conversation.id, project_id)
     return conversation
 
 
@@ -184,7 +194,13 @@ async def send_message(
     )
     try:
         turn = await generate_response(
-            transcript, history, conversation.note_content, conversation.title, settings, db
+            transcript,
+            history,
+            conversation.note_content,
+            conversation.title,
+            settings,
+            db,
+            project_id=conversation.project_id,
         )
     except HTTPException:
         db.delete(user_message)

@@ -72,7 +72,13 @@ export function RecordingWidget({ collapsed = false }: { collapsed?: boolean }) 
       role="status"
       aria-label="Recording in progress"
       onClick={goToRecording}
-      className={`flex items-center gap-1 rounded-md px-2.5 py-2 ${
+      // pr-5 (not pl-2.5's plain 10px) on purpose: the dot's size-7 box below
+      // adds 10px of its own centering space on top of the row's own left
+      // padding, so the visible dot sits 20px in from the edge — matching
+      // that on the right (10 + 10) is what actually centers the timer's
+      // text against it, instead of both sides sharing the same raw padding
+      // value but not the same visual inset.
+      className={`flex items-center gap-1 rounded-md py-2 pl-2.5 pr-5 ${
         targetId ? "cursor-pointer hover:bg-[var(--sidebar-accent)]" : ""
       }`}
     >
