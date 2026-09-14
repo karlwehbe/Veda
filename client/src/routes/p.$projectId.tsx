@@ -137,22 +137,17 @@ function ProjectPage() {
         </div>
 
         {conversations.length > 0 ? (
-          <div className="mt-3">
+          <div className="mt-3 flex flex-col">
             {conversations.map((c) => (
-              // Border on this wrapper, not the Link — a straight divider
-              // between rows, independent of the Link's own rounded hover
-              // background (rounding a border-b directly would curve the
-              // divider itself, not just the hover highlight).
-              <div key={c.id} className="border-b border-border">
-                <Link
-                  to="/c/$conversationId"
-                  params={{ conversationId: c.id }}
-                  className="flex items-center justify-between gap-4 rounded-lg px-3 py-4 text-sm hover:bg-[var(--hover)]"
-                >
-                  <span className="truncate font-medium">{c.title}</span>
-                  <span className="shrink-0 text-xs text-[var(--muted)]">{formatDate(c.updated_at)}</span>
-                </Link>
-              </div>
+              <Link
+                key={c.id}
+                to="/c/$conversationId"
+                params={{ conversationId: c.id }}
+                className="flex items-center justify-between gap-4 rounded-lg px-3 py-4 text-sm hover:bg-[var(--hover)]"
+              >
+                <span className="truncate font-medium">{c.title}</span>
+                <span className="shrink-0 text-xs text-[var(--muted)]">{formatDate(c.updated_at)}</span>
+              </Link>
             ))}
           </div>
         ) : (
