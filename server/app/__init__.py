@@ -1,1 +1,1 @@
-"""AI Note Taker backend application."""
+"""Da Vinci backend application."""

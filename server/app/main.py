@@ -29,7 +29,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="AI Note Taker", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Da Vinci", version="0.1.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,

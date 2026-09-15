@@ -245,7 +245,7 @@ export function Sidebar() {
           to="/"
           className={`rounded font-heading text-xl font-medium tracking-tight ${FOCUS_RING}`}
         >
-          AI Note Taker
+          Da Vinci
         </Link>
         <button
           type="button"

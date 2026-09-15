@@ -34,7 +34,7 @@ class TestStackHealth:
         assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
     def test_openapi_is_served(self, api: httpx.Client) -> None:
-        assert api.get("/openapi.json").json()["info"]["title"] == "AI Note Taker"
+        assert api.get("/openapi.json").json()["info"]["title"] == "Da Vinci"
 
 
 class TestConversationJourney:

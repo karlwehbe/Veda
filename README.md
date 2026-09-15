@@ -1,4 +1,4 @@
-# AI Note Taker
+# Da Vinci
 
 Record a lecture and watch a notes document write itself.
 

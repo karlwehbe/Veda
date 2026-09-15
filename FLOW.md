@@ -1,6 +1,6 @@
 # Flows
 
-End-to-end diagrams for the major paths through AI Note Taker. Each section
+End-to-end diagrams for the major paths through Da Vinci. Each section
 names the real files and functions involved, so a diagram can be traced
 straight into the code.
 
