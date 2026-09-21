@@ -1,8 +1,6 @@
 # Veda
 
-<video src="Demo.mp4" controls muted width="100%">
-  Your browser can't play this video. <a href="Demo.mp4">Watch the demo</a>.
-</video>
+https://github.com/user-attachments/assets/f66330b3-43a9-4ec4-86c0-4d80bcdea600
 
 Record a lecture and watch a notes document write itself.
 
@@ -11,6 +9,9 @@ input should change the notes — then rewrites the document if it should. The
 notes are a single evolving Markdown file per conversation, not a transcript and
 not a chat log: new material gets integrated into the existing structure rather
 than appended to it. Upload the lecture's slides and each one is placed in the
+
+
+
 notes where it belongs.
 
 React + TanStack Router on the front, FastAPI + Postgres on the back, LangGraph
