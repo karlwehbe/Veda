@@ -17,7 +17,7 @@ import { AlertCircle, Loader2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { api } from "@/lib/api"
+import { api, GENERIC_ERROR } from "@/lib/api"
 import type { ProfileFields, UserProfileState } from "@/lib/api"
 
 const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -179,7 +179,7 @@ export function ProfileDialog({ open, onClose, onSaved }: Props) {
     try {
       apply(await api.saveProfile({ name, fields }))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : GENERIC_ERROR)
     } finally {
       setBusy(false)
     }
@@ -195,7 +195,7 @@ export function ProfileDialog({ open, onClose, onSaved }: Props) {
       setSavedSnapshot(snapshot("", EMPTY_FIELDS))
       onSaved({ name: "", fields: EMPTY_FIELDS, has_profile: false })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : GENERIC_ERROR)
     } finally {
       setBusy(false)
     }

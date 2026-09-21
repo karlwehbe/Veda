@@ -610,7 +610,9 @@ def _resolve_llm(settings: Settings, model: str | None = None) -> BaseChatModel:
         logger.warning("LLM provider %r is not configured (missing API key)", provider)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"LLM provider '{provider}' is not configured (missing API key)",
+            # The provider and the missing key are for the log line above, not for
+            # whoever is using the app.
+            detail="The AI service isn't available right now. Please try again later.",
         )
 
     # init_chat_model's automatic provider auth looks up a standard env var

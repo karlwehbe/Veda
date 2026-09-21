@@ -124,6 +124,24 @@ def init_db() -> None:
             )
         )
 
+        # Slide decks are kept now (see models/slide_deck.py). slide_decks is a
+        # wholly new table, made by create_all() above; these are the columns
+        # added to the pre-existing slides table. Slides stored before this
+        # have no deck (their PDF was never kept) and were all in the notes,
+        # hence the defaults.
+        conn.execute(
+            text(
+                "ALTER TABLE slides "
+                "ADD COLUMN IF NOT EXISTS deck_id UUID REFERENCES slide_decks(id) ON DELETE CASCADE"
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_slides_deck_id ON slides (deck_id)"))
+        conn.execute(
+            text("ALTER TABLE slides ADD COLUMN IF NOT EXISTS included BOOLEAN NOT NULL DEFAULT TRUE")
+        )
+        # A page that isn't in the notes has no full-size render.
+        conn.execute(text("ALTER TABLE slides ALTER COLUMN image DROP NOT NULL"))
+
 
 def check_db_connection() -> bool:
     try:

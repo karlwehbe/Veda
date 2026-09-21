@@ -67,7 +67,7 @@ def _to_out(project: Project, conversation_count: int) -> ProjectOut:
 def _get_project_or_404(project_id: uuid.UUID, db: Session) -> Project:
     project = db.get(Project, project_id)
     if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="We couldn't find that project. It may have been deleted.")
     return project
 
 

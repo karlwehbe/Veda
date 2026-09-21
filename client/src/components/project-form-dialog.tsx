@@ -8,7 +8,7 @@ import { createPortal } from "react-dom"
 import { AlertCircle, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { api } from "@/lib/api"
+import { api, GENERIC_ERROR } from "@/lib/api"
 import type { Project } from "@/lib/api"
 
 const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -72,7 +72,7 @@ export function ProjectFormDialog({ open, project = null, onSaved, onCancel }: P
       const saved = isEdit ? await api.updateProject(project.id, payload) : await api.createProject(payload)
       onSaved(saved)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : GENERIC_ERROR)
       setBusy(false)
     }
   }

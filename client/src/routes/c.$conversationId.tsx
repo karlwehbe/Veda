@@ -10,9 +10,12 @@ import { ChatComposer } from "@/components/chat-composer"
 import { GeneratingIndicator } from "@/components/generating-indicator"
 import { MessageBubble } from "@/components/message-bubble"
 import { NotesPanel } from "@/components/notes-panel"
+import { NotesToggle, SidebarToggle } from "@/components/sidebar-toggle"
+import { SlidesDialog } from "@/components/slides-dialog"
 import { api } from "@/lib/api"
+import { fadeMask, useScrollFade } from "@/lib/fade"
 import { useProjectsContext } from "@/lib/projects-context"
-import type { Message } from "@/lib/api"
+import type { Message, SlidesResult } from "@/lib/api"
 
 /** Set when navigating from "/" after the first reply that created notes. */
 export type ConversationLocationState = {
@@ -63,6 +66,15 @@ function ConversationThread() {
   // — otherwise a stale draftTranscript prop can restore into the composer.
   const [draftTranscript, setDraftTranscript] = useState<string | null>(conversation.draft_transcript)
   const [title, setTitle] = useState(conversation.title)
+  const [slideCount, setSlideCount] = useState(conversation.slide_count)
+  // The slides dialog, when open. It owns everything from here — keeping a newly
+  // chosen PDF, ticking pages, loading and error states — so the route only needs
+  // to know whether it is showing, and which file (if any) it was opened for.
+  const [slidesDialog, setSlidesDialog] = useState<{ file: File | null } | null>(null)
+  // After adding slides, a heads-up if some have no spot in the notes yet —
+  // they are hidden until placed, which would otherwise look like a bug.
+  const [slideNotice, setSlideNotice] = useState<string | null>(null)
+  const slideInputRef = useRef<HTMLInputElement | null>(null)
   const [generating, setGenerating] = useState(false)
   const [pendingMessage, setPendingMessage] = useState<Message | null>(null)
   const [streamingId, setStreamingId] = useState<string | null>(() => {
@@ -73,6 +85,10 @@ function ConversationThread() {
     return null
   })
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  // Messages fade out at the bottom edge — the seam with the composer — while
+  // there is more below, instead of being cut off in a straight line. No fade
+  // once scrolled to the newest message, so the latest text is never dimmed.
+  const threadFade = useScrollFade<HTMLDivElement>()
   // False until the first scroll-to-bottom below has run once. ConversationThread
   // remounts fresh per conversation (keyed by conversationId in RouteComponent),
   // so this naturally resets on every visit.
@@ -87,7 +103,14 @@ function ConversationThread() {
     setNoteContent(conversation.note_content)
     setDraftTranscript(conversation.draft_transcript)
     setTitle(conversation.title)
-  }, [conversation.messages, conversation.note_content, conversation.draft_transcript, conversation.title])
+    setSlideCount(conversation.slide_count)
+  }, [
+    conversation.messages,
+    conversation.note_content,
+    conversation.draft_transcript,
+    conversation.title,
+    conversation.slide_count,
+  ])
 
   useEffect(() => {
     // Land at the bottom instantly on the conversation's initial load —
@@ -98,6 +121,28 @@ function ConversationThread() {
     hasScrolledOnceRef.current = true
   }, [messages, generating])
 
+  // Slides are placed against the notes, so there must be notes first — the
+  // server refuses too; this just keeps the button honest.
+  const canAddSlides = Boolean(noteContent)
+
+  function applySlidesResult(result: SlidesResult, { announce = false } = {}) {
+    setNoteContent(result.note_content)
+    // Every page kept, in the notes or not — so "Manage slides" appears as soon
+    // as a PDF is uploaded, even before any page is ticked.
+    setSlideCount(result.slides.length)
+    const included = result.slides.filter((s) => s.included)
+    const unplaced = included.filter((s) => !s.placed).length
+    setSlideNotice(
+      announce && unplaced > 0
+        ? `${unplaced} of ${included.length} slides ${unplaced === 1 ? "isn't" : "aren't"} in your notes yet — they'll appear once your notes cover them. Manage slides shows which.`
+        : null,
+    )
+  }
+
+  function openFileChooser() {
+    slideInputRef.current?.click()
+  }
+
   // No messages yet (eagerly created — e.g. "New chat" from a project page —
   // and nothing sent or recording yet): same centered hero as "/" instead of
   // an empty scroll area, until the first send/record engages the thread.
@@ -105,15 +150,35 @@ function ConversationThread() {
 
   return (
     <div className="flex h-full">
-      <div className="flex h-full flex-1 flex-col overflow-hidden">
-        <div className="py-4 pr-6 pl-6">
-          <h1 className="truncate font-heading text-lg font-medium tracking-tight">
+      <div data-testid="chat-column" className="flex h-full flex-1 flex-col overflow-hidden">
+        <div className="flex items-center gap-2 py-4 pr-3 pl-3 md:gap-3 md:pr-6 md:pl-6">
+          {/* Small screens only: the sidebar and notes are drawers there. */}
+          <SidebarToggle />
+          <h1 className="min-w-0 flex-1 truncate font-heading text-lg font-medium tracking-tight">
             {title}
           </h1>
+          {noteContent ? <NotesToggle /> : null}
+          <input
+            ref={slideInputRef}
+            type="file"
+            accept="application/pdf,.pdf"
+            className="hidden"
+            aria-label="Choose a slides PDF"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              // Reset so choosing the same file again still fires onChange.
+              e.target.value = ""
+              if (file) setSlidesDialog({ file })
+            }}
+          />
         </div>
         <div className={`flex min-h-0 flex-1 flex-col ${engaged ? "justify-end" : "justify-center"}`}>
           {engaged ? (
-            <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-6 py-6">
+            <div
+              ref={threadFade.ref}
+              style={fadeMask({ top: false, bottom: threadFade.edges.bottom })}
+              className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-6 py-6"
+            >
               <div className="mx-auto w-full max-w-2xl space-y-10">
                 {messages.map((m) => (
                   <MessageBubble
@@ -147,6 +212,12 @@ function ConversationThread() {
           <div className="shrink-0">
             <ChatComposer
               conversationId={conversationId}
+              slides={{
+                canUpload: canAddSlides,
+                count: slideCount,
+                onUpload: openFileChooser,
+                onManage: () => setSlidesDialog({ file: null }),
+              }}
               centered={!engaged}
               draftTranscript={draftTranscript}
               onSubmittingChange={setGenerating}
@@ -154,6 +225,7 @@ function ConversationThread() {
               onSent={(turn) => {
                 setMessages((prev) => [...prev, turn.user_message, turn.assistant_message])
                 setNoteContent(turn.note_content)
+                setSlideCount(turn.slide_count)
                 setDraftTranscript(null)
                 if (turn.title) setTitle(turn.title)
                 setStreamingId(turn.assistant_message.id)
@@ -164,7 +236,25 @@ function ConversationThread() {
       </div>
 
       {noteContent ? (
-        <NotesPanel content={noteContent} animateEnter={shouldAnimateNotesEnter} />
+        <NotesPanel
+          content={noteContent}
+          animateEnter={shouldAnimateNotesEnter}
+          notice={slideNotice}
+          onDismissNotice={() => setSlideNotice(null)}
+        />
+      ) : null}
+
+      {slidesDialog ? (
+        <SlidesDialog
+          conversationId={conversationId}
+          file={slidesDialog.file}
+          onChanged={applySlidesResult}
+          onUploadAnother={() => {
+            setSlidesDialog(null)
+            openFileChooser()
+          }}
+          onClose={() => setSlidesDialog(null)}
+        />
       ) : null}
     </div>
   )

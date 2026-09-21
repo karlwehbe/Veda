@@ -70,21 +70,31 @@ const AudioLevelContext = createContext<number>(0)
 // (e.g. Chrome's NotAllowedError message is a full sentence about user
 // agents and platforms) — map the common ones to something someone using
 // the app would actually understand.
-function friendlyRecordingError(err: unknown): string {
+//
+// Which source was asked for matters: for computer audio a NotAllowedError
+// usually just means the share prompt was dismissed, and "microphone access was
+// denied" would be wrong. Anything unrecognised gets a plain sentence, never the
+// browser's own wording.
+function friendlyRecordingError(err: unknown, source: Source): string {
   if (err instanceof DOMException) {
     switch (err.name) {
       case "NotAllowedError":
-        return "Microphone access was denied — check your browser's site permissions and try again."
+        return source === "system"
+          ? "Sharing wasn't allowed. Choose a tab or screen to share, and allow it to include audio."
+          : "Microphone access was denied. Check your browser's site permissions and try again."
       case "NotFoundError":
-        return "No microphone was found — check that one is connected and try again."
+        return "No microphone was found. Check that one is connected and try again."
       case "NotReadableError":
-        return "Couldn't access the microphone — it may already be in use by another app."
-      default:
-        return err.message || "Couldn't start recording."
+        return "Couldn't access the microphone. It may already be in use by another app."
     }
   }
-  return err instanceof Error ? err.message : "Couldn't start recording."
+  // Our own errors (like the "no system audio was shared" one below) are already
+  // written for people; anything else is not.
+  return err instanceof Error && err instanceof CaptureError ? err.message : "Couldn't start recording. Please try again."
 }
+
+/** An error whose message is written for the person using the app. */
+class CaptureError extends Error {}
 
 async function captureSystemAudio(): Promise<MediaStream> {
   const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
@@ -92,8 +102,8 @@ async function captureSystemAudio(): Promise<MediaStream> {
   displayStream.getVideoTracks().forEach((track) => track.stop())
   if (audioTracks.length === 0) {
     audioTracks.forEach((track) => track.stop())
-    throw new Error(
-      'No system audio was shared — when prompted, share a tab or your entire screen and check "share audio."'
+    throw new CaptureError(
+      'No system audio was shared. When prompted, share a tab or your entire screen and check "Share audio."'
     )
   }
   return new MediaStream(audioTracks)
@@ -268,7 +278,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         updateLiveDisplay()
       }
       ws.onerror = () => {
-        setError("Live transcription connection lost — recording continues, but the transcript may stop updating.")
+        setError("The live transcript lost its connection. Your recording continues, but the transcript may stop updating.")
       }
       wsRef.current = ws
 
@@ -289,7 +299,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         }
         const onError = () => {
           cleanup()
-          reject(new Error("Couldn't connect to live transcription"))
+          reject(new Error("Couldn't connect to live transcription. Please try again."))
         }
         function cleanup() {
           ws.removeEventListener("open", onOpen)
@@ -338,7 +348,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       wsRef.current = null
       stream?.getTracks().forEach((track) => track.stop())
       stopAudioLevelMeter()
-      setError(friendlyRecordingError(err))
+      setError(friendlyRecordingError(err, chosenSource))
       setIsRecording(false)
     }
   }

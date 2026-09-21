@@ -4,6 +4,17 @@
 # Postgres and gates "api" on its healthcheck. This is the day-to-day dev
 # database — safe to wipe and reset freely (docker compose down -v, or
 # ./setup.sh --reset).
+#
+# The project name is pinned rather than left to Compose, which would otherwise
+# derive it from the folder this file sits in. The running containers, the
+# network and the database volume (ai-note-taker_pgdata) all belong to
+# "ai-note-taker"; a differently named folder — a clone called "Veda", say —
+# would get a brand-new project and an EMPTY database volume, and ./redeploy.sh
+# would start a second API beside the old one instead of replacing it. Pinning it
+# makes the stack the same wherever the repo is checked out. It is deliberately
+# still "ai-note-taker", not "veda": renaming it would orphan the existing data.
+name: ai-note-taker
+
 services:
   db:
     image: pgvector/pgvector:pg16

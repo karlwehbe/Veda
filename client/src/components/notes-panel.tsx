@@ -1,60 +1,83 @@
 // Right-side panel showing the conversation's persistent lecture-notes
 // document — similar to how Claude opens a document/artifact panel next to
 // the chat. Only rendered once notes actually exist for the conversation.
-// Width is user-resizable (drag the left edge) and collapsible — both
-// persist across reloads, same pattern as the left Sidebar.
+//
+// Beside the chat, its width is user-resizable (drag the left edge) and
+// collapsible, both remembered across reloads — but the *actual* width is
+// decided by the layout (lib/layout-math.ts): it narrows before the chat would
+// drop below its minimum, and the drag stops where the chat would. Under 768px
+// it is a drawer laid over the chat instead.
 import { useEffect, useRef, useState } from "react"
-import { PanelRightClose, PanelRightOpen } from "lucide-react"
+import { PanelRightClose, PanelRightOpen, X } from "lucide-react"
 
 import { Markdown } from "@/components/markdown"
+import { useLayout, useRegisterNotesPanel } from "@/lib/layout-context"
+import { NOTES_MIN, NOTES_RAIL } from "@/lib/layout-math"
 
-const WIDTH_KEY = "notes-panel-width"
-const COLLAPSED_KEY = "notes-panel-collapsed"
-const MIN_WIDTH = 320
-const MAX_WIDTH = 720
-const DEFAULT_WIDTH = 420
-const COLLAPSED_WIDTH = 48
-/** First-open slide; keep under 1s. */
+/** First-open slide and the collapse/expand slide; keep under 1s. */
 const ENTER_MS = 450
-
-function clampWidth(width: number) {
-  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))
-}
 
 export function NotesPanel({
   content,
   animateEnter = false,
+  notice,
+  onDismissNotice,
 }: {
   content: string
+  /** A neutral heads-up (not an error), e.g. that some slides aren't placed yet. */
+  notice?: string | null
+  onDismissNotice?: () => void
   /** Slide open from width 0 when notes first appear (new chat / first create). */
   animateEnter?: boolean
 }) {
-  const [width, setWidth] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_WIDTH
-    const stored = Number(localStorage.getItem(WIDTH_KEY))
-    return Number.isFinite(stored) && stored > 0 ? clampWidth(stored) : DEFAULT_WIDTH
-  })
-  const [collapsed, setCollapsed] = useState(
-    () => typeof window !== "undefined" && localStorage.getItem(COLLAPSED_KEY) === "true"
-  )
+  // Under 768px this is a drawer laid over the chat instead of a panel beside
+  // it (see lib/layout-context.tsx); the drag/collapse/enter-animation state
+  // below only applies to the docked layout.
+  const layout = useLayout()
+  // Tell the layout the notes are on screen, so the sidebar can make room.
+  useRegisterNotesPanel()
+  const collapsed = layout.notesCollapsed
+
   // Capture enter intent only on mount so a later prop flip doesn't cancel
   // the open animation mid-flight.
   const shouldAnimateRef = useRef(animateEnter)
   const [entered, setEntered] = useState(!shouldAnimateRef.current)
   const [isDragging, setIsDragging] = useState(false)
-  const widthRef = useRef(width)
   const draggingRef = useRef(false)
-
+  const draggedWidthRef = useRef(layout.notesPreferredWidth)
+  // The pointer handlers are registered once, so they read the latest layout
+  // through a ref rather than closing over a stale one.
+  const layoutRef = useRef(layout)
   useEffect(() => {
-    widthRef.current = width
-  }, [width])
+    layoutRef.current = layout
+  })
+
+  // The width and opacity slide only for the first opening and for collapse /
+  // expand. Otherwise the width simply follows the window — animating it would
+  // make the panel lag behind while the window is being resized.
+  const [animating, setAnimating] = useState(shouldAnimateRef.current)
+  const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function animateForAWhile() {
+    setAnimating(true)
+    if (animationTimerRef.current) clearTimeout(animationTimerRef.current)
+    animationTimerRef.current = setTimeout(() => setAnimating(false), ENTER_MS + 60)
+  }
+  useEffect(
+    () => () => {
+      if (animationTimerRef.current) clearTimeout(animationTimerRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     if (!shouldAnimateRef.current) return
     // Paint width:0 first, then open — otherwise the transition never runs.
     let raf2 = 0
     const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setEntered(true))
+      raf2 = requestAnimationFrame(() => {
+        setEntered(true)
+        animateForAWhile()
+      })
     })
     return () => {
       cancelAnimationFrame(raf1)
@@ -67,15 +90,19 @@ export function NotesPanel({
   useEffect(() => {
     function onPointerMove(e: PointerEvent) {
       if (!draggingRef.current) return
+      const current = layoutRef.current
       // Panel sits on the right edge; the handle is its left edge, so
-      // dragging the pointer left (smaller clientX) should widen it.
-      setWidth(clampWidth(window.innerWidth - e.clientX))
+      // dragging the pointer left (smaller clientX) should widen it — up to the
+      // point where the chat would drop below its minimum.
+      const next = Math.min(current.notesMaxWidth, Math.max(NOTES_MIN, window.innerWidth - e.clientX))
+      draggedWidthRef.current = next
+      current.setNotesPreferredWidth(next)
     }
     function onPointerUp() {
       if (!draggingRef.current) return
       draggingRef.current = false
       setIsDragging(false)
-      localStorage.setItem(WIDTH_KEY, String(widthRef.current))
+      layoutRef.current.setNotesPreferredWidth(draggedWidthRef.current, true)
       document.body.style.cursor = ""
       document.body.style.userSelect = ""
     }
@@ -95,15 +122,75 @@ export function NotesPanel({
   }
 
   function toggleCollapsed() {
-    setCollapsed((prev) => {
-      const next = !prev
-      localStorage.setItem(COLLAPSED_KEY, String(next))
-      return next
-    })
+    animateForAWhile()
+    layout.toggleNotesCollapsed()
   }
 
-  const targetWidth = collapsed ? COLLAPSED_WIDTH : width
+  const targetWidth = collapsed ? NOTES_RAIL : layout.notesWidth
   const shownWidth = entered ? targetWidth : 0
+
+  // The banners and the document itself — identical in both layouts.
+  const body = (
+    <>
+      {notice ? (
+        <p
+          role="status"
+          className="flex items-center justify-between gap-3 border-b border-border bg-[var(--message)] px-6 py-2 text-sm text-foreground"
+        >
+          <span className="min-w-0">{notice}</span>
+          <button type="button" className="shrink-0 underline underline-offset-2" onClick={onDismissNotice}>
+            Dismiss
+          </button>
+        </p>
+      ) : null}
+      <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto">
+        <div className="prose prose-base max-w-none min-w-0 overflow-x-hidden px-6 py-6 font-sans break-words">
+          <Markdown>{content}</Markdown>
+        </div>
+      </div>
+    </>
+  )
+
+  if (layout.notesDrawer) {
+    const open = layout.notesOpen
+    return (
+      <>
+        {open ? (
+          <div
+            aria-hidden
+            onClick={layout.closeNotes}
+            className="fixed inset-0 z-30 bg-[var(--overlay)] animate-in fade-in duration-200"
+          />
+        ) : null}
+        <aside
+          // Closed, it is off-screen: inert keeps focus and screen readers out.
+          // Open, it is a modal dialog over the chat.
+          aria-label="Notes"
+          role={open ? "dialog" : undefined}
+          aria-modal={open || undefined}
+          inert={!open}
+          className={`fixed inset-y-0 right-0 z-40 flex w-[min(28rem,92vw)] flex-col border-l border-border bg-[var(--sidebar)] transition-transform duration-200 ease-out motion-reduce:transition-none ${
+            // Shadow only while open — closed, it would bleed in from off-screen.
+            open ? "translate-x-0 shadow-xl" : "translate-x-full"
+          }`}
+        >
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <h2 className="font-heading text-base font-medium tracking-tight">Notes</h2>
+            <button
+              type="button"
+              onClick={layout.closeNotes}
+              className="rounded-md p-1.5 text-[var(--muted)] hover:bg-[var(--hover)]"
+              aria-label="Close notes"
+              title="Close notes"
+            >
+              <X className="size-5" />
+            </button>
+          </div>
+          {body}
+        </aside>
+      </>
+    )
+  }
 
   return (
     <aside
@@ -115,9 +202,10 @@ export function NotesPanel({
       style={{
         width: shownWidth,
         opacity: entered ? 1 : 0,
-        transition: isDragging
-          ? "none"
-          : `width ${ENTER_MS}ms ease-out, opacity ${ENTER_MS}ms ease-out`,
+        transition:
+          isDragging || !animating
+            ? "none"
+            : `width ${ENTER_MS}ms ease-out, opacity ${ENTER_MS}ms ease-out`,
       }}
     >
       {/* Fixed inner width so content doesn't reflow while the panel slides open. */}
@@ -152,11 +240,7 @@ export function NotesPanel({
                 <PanelRightClose className="size-5" />
               </button>
             </div>
-            <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto">
-              <div className="prose prose-base max-w-none min-w-0 overflow-x-hidden px-6 py-6 font-sans break-words">
-                <Markdown>{content}</Markdown>
-              </div>
-            </div>
+            {body}
           </>
         )}
       </div>

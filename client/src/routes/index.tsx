@@ -10,6 +10,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import { ChatComposer } from "@/components/chat-composer"
 import { GeneratingIndicator } from "@/components/generating-indicator"
 import { MessageBubble } from "@/components/message-bubble"
+import { SidebarToggle } from "@/components/sidebar-toggle"
 import type { Message } from "@/lib/api"
 import { useRecordingContext } from "@/lib/recording-context"
 
@@ -32,14 +33,20 @@ function NewChat() {
   }, [pendingMessage, generating, recordingStarted])
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
+      {/* Idle hero has no header, so the small-screen menu button floats in the
+          corner; once engaged the header below carries it instead. */}
+      {!engaged ? <SidebarToggle className="absolute top-3 left-3 z-10" /> : null}
       <div
         className={`shrink-0 overflow-hidden transition-[max-height,opacity] duration-500 ease-out ${
           engaged ? "max-h-16 opacity-100" : "pointer-events-none max-h-0 opacity-0"
         }`}
       >
-        <div className="py-4 pr-6 pl-6">
-          <h1 className="truncate font-heading text-lg font-medium tracking-tight">New conversation</h1>
+        <div className="flex items-center gap-2 py-4 pr-3 pl-3 md:pr-6 md:pl-6">
+          {/* Only while the header is showing: collapsed, it is invisible but
+              its button would still be in the tab order. */}
+          {engaged ? <SidebarToggle /> : null}
+          <h1 className="min-w-0 truncate font-heading text-lg font-medium tracking-tight">New conversation</h1>
         </div>
       </div>
 

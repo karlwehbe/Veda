@@ -3,7 +3,7 @@
 // a stub and the notes it returns are fixed and known.
 import { expect, test, type Page } from "@playwright/test"
 
-const COMPOSER = "Message the AI, or record/attach a clip…"
+const COMPOSER = "Type or record…"
 
 async function sendMessage(page: Page, text: string) {
   await page.getByPlaceholder(COMPOSER).fill(text)

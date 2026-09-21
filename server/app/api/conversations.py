@@ -11,6 +11,7 @@ from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import Conversation, Message, Project
 from app.services.notes_graph import generate_response
+from app.services.slides import notes_with_slides, sync_slide_placements
 from app.services.transcription import transcribe_audio
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,9 @@ class ConversationDetailOut(ConversationOut):
     messages: list[MessageOut]
     note_content: str | None
     draft_transcript: str | None
+    # Every page kept for editing, in the notes or not — so the client knows a
+    # deck exists (and offers "Manage slides") even when nothing is included.
+    slide_count: int = 0
 
 
 class MessageTurnOut(BaseModel):
@@ -52,12 +56,13 @@ class MessageTurnOut(BaseModel):
     assistant_message: MessageOut
     note_content: str | None
     title: str
+    slide_count: int = 0
 
 
 def _get_conversation_or_404(conversation_id: uuid.UUID, db: Session) -> Conversation:
     conversation = db.get(Conversation, conversation_id)
     if conversation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="We couldn't find that conversation. It may have been deleted.")
     return conversation
 
 
@@ -71,7 +76,7 @@ def create_conversation(
     db: Session = Depends(get_db),
 ) -> Conversation:
     if project_id is not None and db.get(Project, project_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="We couldn't find that project. It may have been deleted.")
     conversation = Conversation(project_id=project_id)
     db.add(conversation)
     db.commit()
@@ -87,8 +92,14 @@ def list_conversations(db: Session = Depends(get_db)) -> list[Conversation]:
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetailOut)
-def get_conversation(conversation_id: uuid.UUID, db: Session = Depends(get_db)) -> Conversation:
-    return _get_conversation_or_404(conversation_id, db)
+def get_conversation(conversation_id: uuid.UUID, db: Session = Depends(get_db)) -> ConversationDetailOut:
+    conversation = _get_conversation_or_404(conversation_id, db)
+    out = ConversationDetailOut.model_validate(conversation)
+    # The stored notes are slide-free; the client gets them with each slide's
+    # image markdown injected (see app/services/slides.py).
+    out.note_content = notes_with_slides(conversation.note_content, conversation.slides)
+    out.slide_count = len(conversation.slides)
+    return out
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -144,9 +155,9 @@ async def send_message(
     if file is not None:
         audio_bytes = await file.read()
         if not audio_bytes:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That file is empty.")
         if len(audio_bytes) > MAX_AUDIO_BYTES:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large")
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="That file is too large. Audio files can be up to 25 MB.")
         logger.info("[%s] transcribing %d bytes of audio", conversation_id, len(audio_bytes))
         transcript = await transcribe_audio(audio_bytes, settings)
         logger.info("[%s] transcription complete (%d chars)", conversation_id, len(transcript))
@@ -154,7 +165,7 @@ async def send_message(
     elif transcript:
         stored_filename = filename
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Either file or transcript is required")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="There's nothing to send. Type a message, record, or attach an audio file.")
 
     # Silence (or a file with no discernible speech) transcribes to an empty
     # string — bail before persisting anything, so the conversation keeps its
@@ -164,7 +175,7 @@ async def send_message(
         logger.info("[%s] no speech detected, rejecting", conversation_id)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No speech detected in the recording — try again.",
+            detail="We couldn't hear any speech in that recording. Please try again.",
         )
 
     history = [{"role": m.role, "content": m.content} for m in conversation.messages]
@@ -212,7 +223,7 @@ async def send_message(
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Couldn't generate a response — try again.",
+            detail="We couldn't generate a response. Please try again.",
         ) from None
 
     logger.info(
@@ -230,6 +241,10 @@ async def send_message(
     # as it was.
     if turn.notes_updated and turn.note_content is not None:
         conversation.note_content = turn.note_content
+        # Notes were rewritten, so every slide's line number may be stale.
+        # Anchors are re-found by string match; only orphans reach the LLM,
+        # and a placement failure never fails the turn.
+        await sync_slide_placements(list(conversation.slides), conversation.note_content, settings)
     if conversation.title == "New conversation" and turn.title.strip():
         conversation.title = turn.title.strip()[:TITLE_MAX_LEN]
     conversation.updated_at = datetime.now(UTC)
@@ -244,6 +259,7 @@ async def send_message(
         assistant_message=MessageOut.model_validate(assistant_message),
         # Always the stored document, so a chat-only turn doesn't blank the
         # notes panel client-side.
-        note_content=conversation.note_content,
+        note_content=notes_with_slides(conversation.note_content, conversation.slides),
         title=conversation.title,
+        slide_count=len(conversation.slides),
     )

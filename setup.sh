@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# One-command setup for AI Note Taker.
+# One-command setup for Veda.
 #
 #   ./setup.sh          set up everything, then print how to start
 #   ./setup.sh --start  ...and start the dev servers when done

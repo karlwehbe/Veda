@@ -25,11 +25,11 @@ import { ProjectMenu } from "@/components/project-menu"
 import { RecordingWidget } from "@/components/recording-widget"
 import { api } from "@/lib/api"
 import { useConversationsContext } from "@/lib/conversations-context"
+import { useLayout } from "@/lib/layout-context"
 import { useProjectsContext } from "@/lib/projects-context"
 import { useRecordingContext } from "@/lib/recording-context"
 import type { Conversation, Project, UserProfileState } from "@/lib/api"
 
-const COLLAPSED_KEY = "sidebar-collapsed"
 
 // Applied to every hand-rolled interactive element below instead of relying
 // on the browser's default focus outline, which on some browsers/OSes
@@ -78,14 +78,20 @@ export function Sidebar() {
     }
   }
 
-  const [collapsed, setCollapsed] = useState(
-    () => typeof window !== "undefined" && localStorage.getItem(COLLAPSED_KEY) === "true"
-  )
+  // The sidebar is a drawer laid over the chat, rather than a column beside it,
+  // when the window is phone-sized or the chat would otherwise get too narrow
+  // (see lib/layout-math.ts). The user's collapse-to-rail choice is remembered
+  // in the layout context and simply ignored while it is a drawer.
+  const layout = useLayout()
+  const collapsed = layout.sidebarCollapsed
+  const toggleCollapsed = layout.toggleSidebarCollapsed
+  const isDrawer = layout.sidebarDrawer
+  const drawerOpen = isDrawer && layout.sidebarOpen
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   const [pendingDeleteProject, setPendingDeleteProject] = useState<Project | null>(null)
   // Three independent levels of collapse: the whole "Chats" section, the
   // whole "Projects" section, and each project's own nested conversation
-  // list. In-memory only (not persisted like COLLAPSED_KEY below) — this is
+  // list. In-memory only (unlike the collapsed-rail choice, which is remembered) — this is
   // about decluttering the current session's view, not a durable preference.
   const [chatsExpanded, setChatsExpanded] = useState(true)
   const [projectsExpanded, setProjectsExpanded] = useState(true)
@@ -128,13 +134,6 @@ export function Sidebar() {
   const pendingDeleteIsRecording =
     pendingDelete !== null && recording.isRecording && recording.recordingConversationId === pendingDelete.id
 
-  function toggleCollapsed() {
-    setCollapsed((prev) => {
-      const next = !prev
-      localStorage.setItem(COLLAPSED_KEY, String(next))
-      return next
-    })
-  }
 
   function requestDelete(e: React.MouseEvent, conversation: Conversation) {
     e.preventDefault()
@@ -193,7 +192,7 @@ export function Sidebar() {
     }
   }
 
-  if (collapsed) {
+  if (collapsed && !isDrawer) {
     return (
       <aside className="flex h-svh w-14 shrink-0 flex-col items-center gap-2 border-r border-border bg-[var(--sidebar)] py-4">
         <button
@@ -239,20 +238,53 @@ export function Sidebar() {
   const showProjectsList = projectsLoading || projects.length > 0
 
   return (
-    <aside className="flex h-svh w-64 shrink-0 flex-col border-r border-border bg-[var(--sidebar)]">
+    <>
+      {drawerOpen ? (
+        <div
+          aria-hidden
+          onClick={layout.closeSidebar}
+          className="fixed inset-0 z-30 bg-[var(--overlay)] animate-in fade-in duration-200"
+        />
+      ) : null}
+    <aside
+      className={
+        isDrawer
+          ? `fixed inset-y-0 left-0 z-40 flex w-[min(20rem,85vw)] flex-col border-r border-border bg-[var(--sidebar)] transition-transform duration-200 ease-out motion-reduce:transition-none ${
+              // Shadow only while open: closed, the drawer is just off-screen and
+              // its shadow would bleed onto the edge of the chat.
+              drawerOpen ? "translate-x-0 shadow-xl" : "-translate-x-full"
+            }`
+          : "flex h-svh w-64 shrink-0 flex-col border-r border-border bg-[var(--sidebar)]"
+      }
+      // A closed drawer is off-screen: inert keeps keyboard focus and screen
+      // readers out of it. Open, it behaves as a modal dialog.
+      inert={isDrawer && !drawerOpen}
+      role={drawerOpen ? "dialog" : undefined}
+      aria-modal={drawerOpen || undefined}
+      aria-label={isDrawer ? "Sidebar" : undefined}
+      // Any link inside the drawer closes it — including "New chat" while
+      // already on "/", where the route doesn't change and so wouldn't.
+      onClick={
+        isDrawer
+          ? (e) => {
+              if ((e.target as HTMLElement).closest("a")) layout.closeSidebar()
+            }
+          : undefined
+      }
+    >
       <div className="flex items-center justify-between p-4">
         <Link
           to="/"
           className={`rounded font-heading text-xl font-medium tracking-tight ${FOCUS_RING}`}
         >
-          Da Vinci
+          Veda
         </Link>
         <button
           type="button"
-          onClick={toggleCollapsed}
+          onClick={isDrawer ? layout.closeSidebar : toggleCollapsed}
           className={`rounded-md p-1.5 text-[var(--muted)] hover:bg-[var(--hover)] ${FOCUS_RING}`}
-          aria-label="Collapse sidebar"
-          title="Collapse sidebar"
+          aria-label={isDrawer ? "Close sidebar" : "Collapse sidebar"}
+          title={isDrawer ? "Close sidebar" : "Collapse sidebar"}
         >
           <PanelLeftClose className="size-5" />
         </button>
@@ -597,6 +629,7 @@ export function Sidebar() {
 
       <ProfileDialog open={showProfile} onClose={() => setShowProfile(false)} onSaved={setProfile} />
     </aside>
+    </>
   )
 }
 

@@ -47,6 +47,7 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 
 import { MermaidDiagram } from "@/components/mermaid-diagram"
+import { resolveSlideSrc, slideIdFromSrc } from "@/lib/slides"
 
 // The default (GitHub-derived) schema already allows details/summary and
 // the usual block/inline tags, but drops these semantic ones — which are
@@ -289,6 +290,13 @@ export function mermaidSource(children: ReactNode): string | null {
   return typeof source === "string" && source.trim() ? source.trim() : null
 }
 
+// Slides: the server injects each one into the notes as ![alt](/slides/{id}/image).
+// Those are served by the API rather than the page's own origin, so the src is
+// pointed there, and the image links to full size. It's a <span> tree rather
+// than <figure>/<div>: a Markdown image sits inside a <p>, which only accepts
+// phrasing content. Capped at 640px and centred: slides are rendered 1280px wide,
+// and the notes panel has no maximum width of its own, so without a cap a slide
+// would grow to fill a very wide panel.
 export function Markdown({ children }: { children: string }) {
   return (
     <ReactMarkdown
@@ -308,6 +316,22 @@ export function Markdown({ children }: { children: string }) {
         pre(props) {
           const chart = mermaidSource(props.children)
           return chart ? <MermaidDiagram chart={chart} /> : <pre {...props} />
+        },
+        img({ src, alt, title }) {
+          if (typeof src !== "string" || !slideIdFromSrc(src)) return <img src={src} alt={alt ?? ""} title={title} />
+          const full = resolveSlideSrc(src)
+          return (
+            <span className="relative mx-auto my-5 block max-w-[640px]">
+              <a href={full} target="_blank" rel="noreferrer" title="Open full size">
+                <img
+                  src={full}
+                  alt={alt ?? ""}
+                  loading="lazy"
+                  className="m-0 block h-auto w-full rounded-lg border border-border"
+                />
+              </a>
+            </span>
+          )
         },
       }}
     >

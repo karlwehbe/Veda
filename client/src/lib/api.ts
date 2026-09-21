@@ -49,8 +49,11 @@ export type ProjectDetail = Project & {
 
 export type ConversationDetail = Conversation & {
   messages: Message[]
+  // With each slide's image markdown already injected — see
+  // server/app/services/slides.py.
   note_content: string | null
   draft_transcript: string | null
+  slide_count: number
 }
 
 export type MessageTurn = {
@@ -58,7 +61,35 @@ export type MessageTurn = {
   assistant_message: Message
   note_content: string | null
   title: string
+  slide_count: number
 }
+
+// One page of an uploaded slide deck. The whole deck is kept, so every page
+// is listed whether or not it is in the notes.
+export type Slide = {
+  id: string
+  // The PDF it came from. null only for slides stored before decks were kept:
+  // those can be removed but not added back.
+  deck_id: string | null
+  deck_name: string | null
+  position: number
+  page_number: number
+  alt: string
+  // In the notes (checked in the slides dialog) or just kept in the deck.
+  included: boolean
+  // An included slide with no spot in the notes yet: kept, hidden, and retried
+  // after every notes update.
+  placed: boolean
+}
+
+// What every slide mutation returns: every page of every deck, and the notes
+// with the included slides injected so the panel can update without a refetch.
+export type SlidesResult = {
+  slides: Slide[]
+  note_content: string | null
+}
+
+export type DeckUploadResult = SlidesResult & { deck_id: string }
 
 // The personal context layer: a short profile compiled by an LLM into a
 // description of the user that rides along on every note/chat prompt.
@@ -81,6 +112,10 @@ export type UserProfileState = {
   has_profile: boolean
 }
 
+/** What someone sees when we have nothing more specific to say. No status codes,
+ *  no stack, no hints about servers or deploys. */
+export const GENERIC_ERROR = "Something went wrong. Please try again."
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
@@ -90,14 +125,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // (offline, DNS failure, connection refused) — the raw browser message
     // for that ("Failed to fetch", "NetworkError...") isn't something to
     // show someone using the app.
-    throw new Error("Can't reach the server — check your connection and try again.")
+    throw new Error("Can't reach the server. Check your connection and try again.")
   }
   if (!res.ok) {
+    // Only a string detail is a message written for people. FastAPI's validation
+    // errors carry an array of objects, which would otherwise be shown as
+    // "[object Object]".
     const message = await res
       .json()
-      .then((body: { detail?: string }) => body.detail)
+      .then((body: { detail?: unknown }) => (typeof body.detail === "string" ? body.detail : undefined))
       .catch(() => undefined)
-    throw new Error(message || `Something went wrong — please try again. (error ${res.status})`)
+    // The status is for whoever is debugging, not for the person using the app.
+    console.error(`API error ${res.status} for ${init?.method ?? "GET"} ${path}`, message ?? "")
+    // FastAPI's own "no such route" 404 has this exact body; every handler in
+    // this app raises its 404s with a specific detail instead. So the server has
+    // no such endpoint — the page and the server are out of step, typically just
+    // after an update. A refresh loads the matching page.
+    if (res.status === 404 && message === "Not Found") {
+      throw new Error("This isn't available right now. Please refresh the page and try again.")
+    }
+    throw new Error(message || GENERIC_ERROR)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
@@ -158,6 +205,29 @@ export const api = {
       body: JSON.stringify({ transcript }),
       keepalive: true,
     }),
+  // Keeps the whole PDF with the conversation — a thumbnail and the text of every
+  // page — without putting anything in the notes or calling a model.
+  uploadSlideDeck: (conversationId: string, file: File) => {
+    const formData = new FormData()
+    formData.append("file", file)
+    return request<DeckUploadResult>(`/conversations/${conversationId}/slides/decks`, {
+      method: "POST",
+      body: formData,
+    })
+  },
+  listSlides: (conversationId: string) => request<Slide[]>(`/conversations/${conversationId}/slides`),
+  // Put pages in the notes / take pages out. Only the named pages are touched:
+  // added ones are rendered and placed, removed ones just leave the notes (and
+  // stay in the deck to be added back later).
+  changeSlides: (conversationId: string, change: { add: string[]; remove: string[] }) =>
+    request<SlidesResult>(`/conversations/${conversationId}/slides`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(change),
+    }),
+  // Forget an uploaded PDF entirely (unlike un-ticking a page, which keeps it).
+  deleteSlideDeck: (conversationId: string, deckId: string) =>
+    request<SlidesResult>(`/conversations/${conversationId}/slides/decks/${deckId}`, { method: "DELETE" }),
   getProfile: () => request<UserProfileState>("/profile"),
   saveProfile: (input: { name: string; fields: ProfileFields }) =>
     request<UserProfileState>("/profile", {

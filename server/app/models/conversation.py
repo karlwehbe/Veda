@@ -41,3 +41,9 @@ class Conversation(Base):
         "Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at"
     )
     project = relationship("Project", back_populates="conversations")
+    slides = relationship(
+        "Slide", back_populates="conversation", cascade="all, delete-orphan", order_by="Slide.position"
+    )
+    decks = relationship(
+        "SlideDeck", back_populates="conversation", cascade="all, delete-orphan", order_by="SlideDeck.created_at"
+    )

@@ -62,7 +62,7 @@ async def ws_transcribe(websocket: WebSocket, conversation_id: str | None = None
 
     if not settings.deepgram_api_key:
         logger.warning("%s transcription not configured (missing Deepgram API key)", tag)
-        await websocket.close(code=1011, reason="Transcription is not configured")
+        await websocket.close(code=1011, reason="Transcription isn't available right now.")
         return
 
     try:

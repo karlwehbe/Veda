@@ -1,19 +1,15 @@
-# Flows
+# How Veda fits together
 
-End-to-end diagrams for the major paths through Da Vinci. Each section
-names the real files and functions involved, so a diagram can be traced
-straight into the code.
+The overview: what the pieces are, how a request travels through them, and where each
+kind of state lives. It is deliberately short. The detailed flows — with the real files and
+functions named, so a diagram can be traced straight into the code — live in one page per
+feature; the [feature map](#4-feature-map) below links to each.
 
 - [1. System overview](#1-system-overview)
 - [2. Data model](#2-data-model)
-- [3. Live recording → notes](#3-live-recording--notes)
-- [4. File upload → notes](#4-file-upload--notes)
-- [5. Recording details](#5-recording-details)
-- [6. Typed message → notes](#6-typed-message--notes)
-- [7. Routing: notes vs chat](#7-routing-notes-vs-chat)
-- [8. User profile](#8-user-profile)
-- [9. Conversation creation & cleanup](#9-conversation-creation--cleanup)
-- [10. Rendering the notes document](#10-rendering-the-notes-document)
+- [3. One turn, end to end](#3-one-turn-end-to-end)
+- [4. Feature map](#4-feature-map)
+- [5. Where state lives](#5-where-state-lives)
 
 ---
 
@@ -22,41 +18,57 @@ straight into the code.
 ```mermaid
 flowchart LR
   subgraph Browser["Browser (React + TanStack Router)"]
-    UI["Sidebar / routes<br/>index.tsx, c.$conversationId.tsx"]
+    UI["Sidebar and routes<br/>index.tsx, c.$conversationId.tsx, p.$projectId.tsx"]
+    LC["LayoutProvider<br/>lib/layout-context.tsx"]
     RC["RecordingProvider<br/>lib/recording-context.tsx<br/><i>above the router</i>"]
     CC["ChatComposer<br/>components/chat-composer.tsx"]
+    SD["SlidesDialog<br/>components/slides-dialog.tsx"]
+    MD["Markdown renderer<br/>components/markdown.tsx"]
     API["api client<br/>lib/api.ts"]
   end
 
   subgraph Server["FastAPI (server/app)"]
     CONV["/conversations<br/>api/conversations.py"]
-    WS["/ws/transcribe<br/>api/live_transcribe.py"]
+    PRJ["/projects<br/>api/projects.py"]
+    SL["/conversations/{id}/slides<br/>api/slides.py"]
     PR["/profile<br/>api/profile.py"]
-    GRAPH["notes_graph.py<br/>LangGraph: classify → notes/chat"]
+    WS["/ws/transcribe<br/>api/live_transcribe.py"]
+    GRAPH["notes_graph.py<br/>LangGraph: classify → notes / chat"]
+    SVC["services/slides.py<br/>read, render, place slides"]
     TR["transcription.py<br/>batch STT"]
   end
 
-  DB[("Postgres<br/>conversations, messages,<br/>user_profiles")]
+  DB[("Postgres<br/>conversations, messages, projects,<br/>slide_decks, slides, user_profiles")]
   DG["Deepgram<br/>live + batch STT"]
-  LLM["OpenAI<br/>via init_chat_model<br/><i>two models: LLM_MODEL + ROUTING_LLM_MODEL</i>"]
+  LLM["OpenAI<br/>via init_chat_model<br/><i>LLM_MODEL + ROUTING_LLM_MODEL</i>"]
 
   UI --> CC
+  UI --> LC
   RC -.->|shared recording state| CC
   CC --> API
+  SD --> API
   API -->|REST| CONV
+  API -->|REST| PRJ
+  API -->|REST| SL
   API -->|REST| PR
   RC -->|WebSocket audio| WS
   WS <-->|proxied stream| DG
   CONV --> TR --> DG
   CONV --> GRAPH --> LLM
+  CONV --> SVC
+  SL --> SVC
+  SVC -->|placement| LLM
   PR --> GRAPH
   CONV --> DB
+  PRJ --> DB
+  SL --> DB
   PR --> DB
-  GRAPH -->|"reads compiled_prompt"| DB
+  GRAPH -->|"reads the compiled profile<br/>and project Instructions"| DB
 ```
 
-The Deepgram API key never reaches the browser — `/ws/transcribe` proxies the
-live stream server-side (`live_transcribe.py`).
+The Deepgram API key never reaches the browser: `/ws/transcribe` proxies the live stream
+server-side. There is no sign-in — one profile row, one set of conversations, global to
+whoever opens the page.
 
 ---
 
@@ -64,11 +76,24 @@ live stream server-side (`live_transcribe.py`).
 
 ```mermaid
 erDiagram
+  PROJECTS ||--o{ CONVERSATIONS : "files"
   CONVERSATIONS ||--o{ MESSAGES : has
+  CONVERSATIONS ||--o{ SLIDE_DECKS : has
+  CONVERSATIONS ||--o{ SLIDES : has
+  SLIDE_DECKS ||--o{ SLIDES : "one per page"
+
+  PROJECTS {
+    uuid id PK
+    string name
+    string type "free text: Course, Research…"
+    text description "shown to the user, never to the model"
+    text instructions "reaches the writer verbatim"
+  }
   CONVERSATIONS {
     uuid id PK
-    string title "AI-generated on first turn"
-    text note_content "the evolving notes document"
+    string title "AI-generated on the first turn"
+    uuid project_id FK "NULL = not in a project"
+    text note_content "the evolving notes document — never holds slides"
     text draft_transcript "autosaved mid-recording, cleared on send"
     timestamp created_at
     timestamp updated_at
@@ -81,6 +106,26 @@ erDiagram
     string filename "audio upload name, or recording.webm for live"
     timestamp created_at
   }
+  SLIDE_DECKS {
+    uuid id PK
+    uuid conversation_id FK
+    string filename
+    int page_count
+    bytea pdf "kept, deferred — pages render from it on demand"
+  }
+  SLIDES {
+    uuid id PK
+    uuid deck_id FK "NULL only for slides from before decks were kept"
+    int position "order across decks"
+    int page_number "page in the PDF"
+    bool included "in the notes, or just kept in the deck"
+    bytea thumbnail "every page, from upload"
+    text text "every page, from upload"
+    bytea image "full size — only while included"
+    text anchor_text "the notes line this slide follows"
+    text anchor_heading "nearest heading above that line"
+    int after_line "cache: anchor_text's line in the current notes"
+  }
   USER_PROFILES {
     uuid id PK
     string name "compiled in; usable in chat, never in the notes"
@@ -91,275 +136,98 @@ erDiagram
   }
 ```
 
-`USER_PROFILES` is a single global row (no auth in this build). Two fields reach
-the model differently:
+`USER_PROFILES` is a single global row. Deleting a project deletes its conversations, and a
+conversation's messages, decks and slides go with it — the foreign keys all cascade.
 
-- **`compiled_prompt`** — LLM-written third-person description of the user.
-  Private: pasted into prompts, never returned by the API.
-- **`fields.instructions`** — the user's own text, passed to the writer
-  **verbatim** (skips the compiler).
-
-Everything else the model is told lives as constants in
-`services/notes_graph.py`.
+Everything the model is told is a constant in `services/notes_graph.py`, apart from the
+compiled profile (generated per user, so it lives in the database).
 
 ---
 
-## 3. Live recording → notes
+## 3. One turn, end to end
 
-`MediaRecorder` emits audio chunks every 250ms. Those chunks stream through
-`/ws/transcribe` to Deepgram so a transcript appears while you speak. On send,
-that transcript is what becomes the user message and what the LLM reads.
+The path every input takes, whatever form it started in. Each step is expanded in the page
+named beside it.
 
 ```mermaid
 sequenceDiagram
   autonumber
   actor U as User
-  participant RC as RecordingContext
-  participant DG as Deepgram live
-  participant API as /conversations
-  participant G as notes_graph
+  participant CL as Client
+  participant API as POST /messages
+  participant STT as Deepgram
+  participant G as generate_response
   participant LLM as OpenAI
-
-  U->>RC: start recording
-  RC->>DG: WebSocket chunks via /ws/transcribe
-  DG-->>RC: live transcript
-  U->>RC: send
-  RC->>API: POST /messages (transcript + filename)
-  Note over API: no audio file — skip batch STT
-  API->>G: generate_response(transcript)
-  G->>LLM: classify then write_notes or answer_chat
-  LLM-->>G: chat_reply + maybe notes
-  G-->>API: TurnResult
-  API-->>U: MessageTurn
-```
-
-The LLM never hears the audio — only the transcript string. Live send posts
-`transcript` plus `filename=recording.webm` (metadata only, no bytes). Batch
-Deepgram (for when there is no live text) is the
-[file upload](#4-file-upload--notes) path.
-
-Details that used to live in this diagram (eager conversation create, draft
-autosave, silence delete, pause) are in [§5](#5-recording-details). How the
-graph chooses notes vs chat is in [§7](#7-routing-notes-vs-chat).
-
----
-
-## 4. File upload → notes
-
-No live transcript — the attached file **is** the blob. The server must
-transcribe it.
-
-```mermaid
-sequenceDiagram
-  autonumber
-  actor U as User
-  participant CC as ChatComposer
-  participant API as /conversations
-  participant TR as transcription.py
-  participant DG as Deepgram REST
-  participant G as notes_graph
-  participant LLM as OpenAI
-
-  U->>CC: attach audio → send
-  CC->>API: POST /messages (file, no transcript)
-  API->>TR: transcribe_audio(bytes)
-  TR->>DG: POST /v1/listen
-  DG-->>API: transcript
-  API->>G: generate_response(transcript)
-  G->>LLM: classify then write_notes or answer_chat
-  LLM-->>G: chat_reply + maybe notes
-  G-->>API: TurnResult
-  API-->>CC: MessageTurn
-```
-
-Chat shows a **file chip** (real filename). Live recordings store
-`filename=recording.webm` as metadata only (no audio upload) —
-`isFileAttachment()` in `message-bubble.tsx` tells them apart. Audio bytes
-are not persisted either way; only transcript + filename are.
-
----
-
-## 5. Recording details
-
-Extras around the live path in §3 — lifecycle, navigation, and crash safety.
-
-### Lifecycle
-
-```mermaid
-stateDiagram-v2
-  [*] --> Idle
-  Idle --> Recording: record (stream + socket ready)
-  Recording --> Paused: pause
-  Paused --> Recording: resume
-  Recording --> Idle: send / discard
-  Paused --> Idle: send / discard
-```
-
-Pause does **not** split the recording — the same MediaRecorder session
-keeps streaming chunks to Deepgram.
-Discard (or silence on send) deletes the conversation only if it was created
-just for that recording and never successfully sent.
-
-### Survives navigation
-
-`RecordingProvider` sits **above** the router, so changing pages does not stop
-the mic.
-
-```mermaid
-flowchart LR
-  R["Recording in progress"] --> Q{"viewing that conversation?"}
-  Q -->|yes| INLINE["ChatComposer: transcript, pause, send"]
-  Q -->|no| WIDGET["RecordingWidget in sidebar"]
-  WIDGET -->|click| INLINE
-```
-
-### Draft autosave
-
-Final Deepgram segments (and pause) `PATCH /{id}/draft`. After a crash or
-reload, `GET /conversations/{id}` restores `draft_transcript` into the
-composer. A successful send clears it. Guards stop late WebSocket finals from
-resurrecting a discarded draft (`allowDraftSaveRef`, clear `onmessage` before
-close).
-
----
-
-## 6. Typed message → notes
-
-No audio — only the text form field.
-
-```mermaid
-flowchart LR
-  A["User types + send"] --> B["POST /messages<br/>(transcript only)"]
-  B --> C["generate_response()"]
-  C --> D{"update notes?"}
-  D -->|yes| E["notes edited"]
-  D -->|no| F["chat reply only"]
-  E --> G["MessageTurn"]
-  F --> G
-```
-
----
-
-## 7. Routing: notes vs chat
-
-Every turn is a **two-step** LangGraph: classify first, then either write notes
-or answer in chat.
-
-```mermaid
-flowchart TD
-  IN["transcript / typed text"] --> C["classify<br/>→ RouteDecision"]
-  C --> Q{"update_notes?"}
-  Q -->|true| N{"notes empty?"}
-  N -->|yes| WN["write_notes · starting"]
-  N -->|no| W["write_notes · extending"]
-  Q -->|false| A["answer_chat"]
-  WN --> S["notes_updated = true"]
-  W --> S
-  A --> U["notes_updated = false"]
-```
-
-**Why two calls.** The router schema has no `note_content` field, so it
-*cannot* rewrite the document. One call asked to “return the full notes”
-tended to always return one — filler like `thanks` used to trash the doc.
-
-`conversations.py` only saves notes when `notes_updated` is true.
-
-### What reaches each prompt
-
-```mermaid
-flowchart LR
-  BASE["DEFAULT_BASE_INSTRUCTIONS"] --> R["routing<br/>ROUTING_LLM_MODEL"]
-  BASE --> N["notes<br/>LLM_MODEL"]
-  BASE --> C["chat<br/>LLM_MODEL"]
-  PROF["compiled_prompt"] -.-> N
-  PROF -.-> C
-  INST["fields.instructions"] -.-> N
-  INST -.-> C
-```
-
-The **router** gets neither profile nor instructions — whether notes should
-change is independent of who the user is. Both personalization blocks reach
-notes *and* chat. Transcript / notes / history are treated as **data** under
-a shared trust-boundary rule in `DEFAULT_BASE_INSTRUCTIONS` (prompt hygiene,
-not hard enforcement).
-
----
-
-## 8. User profile
-
-Form answers are compiled into a private description; Instructions stay as the
-user typed them.
-
-```mermaid
-sequenceDiagram
-  autonumber
-  actor U as User
-  participant PR as /profile
-  participant G as notes_graph
   participant DB as Postgres
 
-  U->>PR: PUT name + fields
-  PR->>DB: COMMIT answers first
-  alt answers changed
-    PR->>G: compile_profile(...)
-    G-->>PR: description or failure
-    PR->>DB: compiled_prompt / compile_failed_at
+  alt live recording
+    U->>CL: speak
+    CL->>STT: audio via /ws/transcribe
+    STT-->>CL: live transcript
+    CL->>API: transcript + filename=recording.webm
+  else audio file
+    U->>CL: attach a file
+    CL->>API: the file
+    API->>STT: transcribe_audio
+    STT-->>API: transcript
+  else typed
+    U->>CL: type
+    CL->>API: transcript
   end
-  PR-->>U: 200 with name + fields only<br/>(never compiled_prompt)
+  API->>DB: save the user message
+  API->>G: input, history, current notes
+  G->>LLM: classify (cheap model)
+  alt the notes should change
+    G->>LLM: write_notes (writing model)
+  else just a question
+    G->>LLM: answer_chat
+  end
+  LLM-->>G: reply, and maybe new notes
+  G-->>API: TurnResult
+  API->>DB: save the reply, the notes, the title
+  Note over API: only if the notes changed: re-anchor any slides
+  API-->>CL: the turn, with slides injected into the notes
 ```
 
-| | Compiled description | Instructions |
-|---|---|---|
-| Author | LLM from form answers | user |
-| Visible | no | yes |
-| To the writer | compiled prose | verbatim |
-| On compile failure | omit personal layer; notes still generate | unaffected |
-
-If answers exist but `compiled_prompt` is null, the next note job **lazy-retries**
-compilation once, then continues without personalization rather than failing
-the turn.
+The model never hears audio — only the transcript text. Recording and uploading:
+[Transcription](docs/transcription/README.md). The turn itself and why a failure is safe:
+[Conversations](docs/conversations/README.md). The two-step model call:
+[Notes generation](docs/notes-generation/README.md). Slides re-anchoring:
+[Slides](docs/slides/README.md).
 
 ---
 
-## 9. Conversation creation & cleanup
+## 4. Feature map
 
-Recording needs a conversation id for drafts, so create is **eager** on
-record. Typed/upload create **lazily** at send.
-
-```mermaid
-flowchart TD
-  START(["User on /"]) --> ACT{"action"}
-  ACT -->|record| EAGER["POST /conversations now"]
-  ACT -->|type / attach + send| LAZY["create during send"]
-  EAGER --> OUT{"end of recording"}
-  OUT -->|send with speech| KEEP["kept · AI title on first turn"]
-  OUT -->|silence / discard| DEL["delete throwaway conversation"]
-  LAZY --> KEEP
-```
-
-Deleting a conversation always stops any attached recording first.
+| Feature | The flow in a line | Detail |
+| --- | --- | --- |
+| Conversations | A turn saves your message first and removes it again if generation fails; the notes change only when the router says so | [docs/conversations](docs/conversations/README.md) |
+| Transcription | `MediaRecorder` chunks → `/ws/transcribe` → Deepgram → a live transcript; or a file → `transcribe_audio` | [docs/transcription](docs/transcription/README.md) |
+| Notes generation | `classify → write_notes \| answer_chat`; the router cannot write notes and never sees personalization | [docs/notes-generation](docs/notes-generation/README.md) |
+| Personal profile | Answers are committed, then compiled into a private description; Instructions go through verbatim | [docs/profile](docs/profile/README.md) |
+| Projects | A folder of conversations whose Instructions reach the writer; deleting one cascades | [docs/projects](docs/projects/README.md) |
+| Slides | Keep the whole PDF; tick pages; only the difference is rendered and placed; unplaced slides stay hidden | [docs/slides](docs/slides/README.md) |
+| Rendering | `normalizeMath → gfm/math → raw → sanitize → katex`; Mermaid falls back to source | [docs/rendering](docs/rendering/README.md) |
+| Chat interface | The composer, the menus, message boxes, collapse and fade | [docs/chat-ui](docs/chat-ui/README.md) |
+| Layout | The chat never drops below 360 px: notes shrink, then the sidebar becomes a drawer | [docs/layout](docs/layout/README.md) |
+| Testing | Five layers, two stacks, one model stub | [docs/testing](docs/testing/README.md) |
 
 ---
 
-## 10. Rendering the notes document
+## 5. Where state lives
 
-Model Markdown is untrusted input. Notes panel and assistant chat share one
-`<Markdown>` component (`components/markdown.tsx`).
+Knowing where a piece of state lives is most of knowing where a bug can be.
 
-```mermaid
-flowchart TD
-  SRC["Markdown from the model"] --> NM["normalizeMath()"]
-  NM --> RG["remark-gfm + remark-math"]
-  RG --> RAW["rehype-raw"]
-  RAW --> SAN["rehype-sanitize"]
-  SAN --> KTX["rehype-katex"]
-  KTX --> OUT["React"]
-  OUT --> PRE{"mermaid fence?"}
-  PRE -->|yes| MD["MermaidDiagram"]
-  PRE -->|no| CODE["code block"]
-```
+| State | Lives in | Survives a reload? |
+| --- | --- | --- |
+| Conversations, messages, notes | Postgres | yes |
+| The autosaved draft transcript | Postgres (`draft_transcript`) | yes |
+| Kept slide decks and their pages | Postgres | yes |
+| The profile, projects | Postgres | yes |
+| An in-progress recording (mic, socket, live transcript) | `RecordingProvider`, in memory, above the router | no — hence the draft |
+| A first send that is still generating while the page changes | a module-level variable in `lib/first-send.ts` | no |
+| Whether the sidebar / notes are collapsed, and the notes' dragged width | `localStorage` (`sidebar-collapsed`, `notes-panel-collapsed`, `notes-panel-width`) | yes |
+| Whether a drawer is open | `LayoutProvider`, in memory | no, by design |
+| The conversation and project lists in the sidebar | React context, refetched on demand | refetched |
 
-Order matters: **raw → sanitize → katex** (KaTeX injects classes sanitize
-would strip). Mermaid is intercepted on `<pre>`, loaded dynamically, and
-falls back to source on parse failure so a bad diagram never blanks the
-notes.
+Nothing is stored about the audio itself: only the transcript and a filename.

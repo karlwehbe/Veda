@@ -1,1 +1,1 @@
-"""Da Vinci backend application."""
+"""Veda backend application."""

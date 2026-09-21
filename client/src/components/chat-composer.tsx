@@ -1,5 +1,5 @@
 // Bottom-fixed composer — record from the mic or system audio (with
-// pause/resume), or attach a file, then send. The actual recording engine
+// pause/resume), or attach an audio file (or slides, via the "+" menu), then send. The actual recording engine
 // (MediaRecorder, the /ws/transcribe socket, live transcript, timer) lives
 // in RecordingContext at the app root, not here — so it survives navigating
 // away mid-recording instead of being torn down. This component is a "view"
@@ -14,15 +14,28 @@
 // is allowed in both, and on a new chat the first send creates the
 // conversation and navigates into it (see finalizeSendText). Only the
 // page shell around it (title bar, notes panel) differs.
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useNavigate, useRouterState } from "@tanstack/react-router"
-import { AlertCircle, ArrowUp, AudioLines, FileAudio, Mic, Monitor, Paperclip, Pause, Play, X } from "lucide-react"
+import {
+  AlertCircle,
+  ArrowUp,
+  AudioLines,
+  FileAudio,
+  Mic,
+  Monitor,
+  Pause,
+  Play,
+  Plus,
+  Presentation,
+  X,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { api } from "@/lib/api"
+import { api, GENERIC_ERROR } from "@/lib/api"
 import { useConversationsContext } from "@/lib/conversations-context"
+import { fadeMask, useScrollFade } from "@/lib/fade"
 import { useRecordingContext } from "@/lib/recording-context"
 import type { MessageTurn, Message } from "@/lib/api"
 import type { Source } from "@/lib/recording-context"
@@ -46,6 +59,57 @@ type Props = {
   // thread show the right bubble shape (file chip vs transcript) before the
   // round trip completes.
   onPendingMessage?: (message: Message | null) => void
+  // Slides live in the "+" menu next to the attach action. Omitted on the
+  // new-chat page, where there is no conversation (and so no notes) yet — the
+  // menu item is then shown disabled rather than missing.
+  slides?: SlidesMenu
+}
+
+export type SlidesMenu = {
+  // Slides are placed against the notes, so this is false until they exist.
+  canUpload: boolean
+  count: number
+  onUpload: () => void
+  onManage: () => void
+}
+
+// A hover-opened popover menu anchored above its trigger. The menu is portaled
+// to document.body so it isn't clipped by the chat column's own
+// overflow-hidden and can render above the notes sidebar — a plain CSS-hover
+// popover can't escape an ancestor's overflow. Since it's portaled, hover
+// state has to be driven in JS rather than CSS :hover, and needs a short
+// close-delay so moving the pointer from the trigger into the menu doesn't
+// flicker it shut in the gap between them.
+function useHoverMenu() {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
+  const anchorRef = useRef<HTMLDivElement | null>(null)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const cancelClose = useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
+      timeoutRef.current = null
+    }
+  }, [])
+  const show = useCallback(() => {
+    cancelClose()
+    const el = anchorRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    setPos({ top: rect.top, left: rect.left })
+    setOpen(true)
+  }, [cancelClose])
+  const scheduleClose = useCallback(() => {
+    timeoutRef.current = setTimeout(() => setOpen(false), 150)
+  }, [])
+  const close = useCallback(() => {
+    cancelClose()
+    setOpen(false)
+  }, [cancelClose])
+  useEffect(() => cancelClose, [cancelClose])
+
+  return { open, pos, anchorRef, show, scheduleClose, close }
 }
 
 // Textarea grows with content up to this height, then becomes scrollable —
@@ -64,6 +128,7 @@ export function ChatComposer({
   onSent,
   onSubmittingChange,
   onPendingMessage,
+  slides,
 }: Props) {
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
@@ -108,8 +173,8 @@ export function ChatComposer({
   // "New conversation" (conversationId prop stays null while we remain on /).
   const [createdConversationId, setCreatedConversationId] = useState<string | null>(null)
 
-  const [showSourceMenu, setShowSourceMenu] = useState(false)
-  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 })
+  const sourceMenu = useHoverMenu()
+  const addMenu = useHoverMenu()
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   // True while a file drag is over the composer shell — drives a small
   // scale/border pulse. Depth counter so entering child nodes doesn't flicker.
@@ -120,8 +185,7 @@ export function ChatComposer({
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const shellRef = useRef<HTMLDivElement | null>(null)
-  const recordButtonRef = useRef<HTMLDivElement | null>(null)
-  const closeMenuTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const audioInputRef = useRef<HTMLInputElement | null>(null)
   const fileDragDepthRef = useRef(0)
 
   // Tell RecordingContext which conversation this composer is showing —
@@ -132,33 +196,6 @@ export function ChatComposer({
     recording.reportViewingConversation(conversationId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId])
-
-  // The source menu is portaled to document.body (see recordButton below) so
-  // it isn't clipped by the chat column's own overflow-hidden and can render
-  // above the notes sidebar — a plain CSS-hover popover can't escape an
-  // ancestor's overflow. Since it's portaled, hover state has to be driven
-  // in JS rather than CSS :hover, and needs a short close-delay so moving
-  // the pointer from the button into the menu doesn't flicker it shut in
-  // the gap between them.
-  function openSourceMenu() {
-    if (closeMenuTimeoutRef.current) {
-      clearTimeout(closeMenuTimeoutRef.current)
-      closeMenuTimeoutRef.current = null
-    }
-    const el = recordButtonRef.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    setMenuPos({ top: rect.top, left: rect.left })
-    setShowSourceMenu(true)
-  }
-  function scheduleCloseSourceMenu() {
-    closeMenuTimeoutRef.current = setTimeout(() => setShowSourceMenu(false), 150)
-  }
-  useEffect(() => {
-    return () => {
-      if (closeMenuTimeoutRef.current) clearTimeout(closeMenuTimeoutRef.current)
-    }
-  }, [])
 
   useEffect(() => {
     onSubmittingChange?.(submitting)
@@ -264,7 +301,7 @@ export function ChatComposer({
       }
     } catch (err) {
       if (!aliveRef.current) return
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : GENERIC_ERROR)
       onPendingMessage?.(null)
       if (attachedFile) setFile(attachedFile)
     } finally {
@@ -303,7 +340,7 @@ export function ChatComposer({
       }
     } catch (err) {
       if (!aliveRef.current) return
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : GENERIC_ERROR)
       onPendingMessage?.(null)
       // Restore transcript into the composer for retry. Server rolls back the
       // user row on AI failure so a retry won't duplicate.
@@ -344,7 +381,7 @@ export function ChatComposer({
       }
     } catch (err) {
       if (!aliveRef.current) return
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : GENERIC_ERROR)
       onPendingMessage?.(null)
       // Put it back where it came from: a recovered transcript returns to the
       // transcript display, typed text to the textarea. Conversation stays —
@@ -390,7 +427,7 @@ export function ChatComposer({
       // round trip was what made this look like it "sent, then bounced
       // back": a phantom bubble appeared and then vanished on the 400).
       setSubmitting(false)
-      setError("No speech detected in the recording — try again.")
+      setError("We couldn't hear any speech in that recording. Please try again.")
       // Don't leave a permanent empty "New conversation" behind for a
       // recording that's being rejected before it ever reaches the server —
       // only applies if this conversation was created just for this
@@ -486,13 +523,27 @@ export function ChatComposer({
     syncTextareaSize()
   }, [stacked, showTextarea])
 
-  // Same path as the paperclip input — also used by drag-and-drop onto the
+  // A soft fade where the textarea and the transcript area clip their text
+  // (both cap at 200px and scroll), instead of a hard cutoff. Declared after
+  // the sizing effects above so it measures the height they just set. The
+  // textarea keeps its own ref for sizing; one stable callback feeds both.
+  const textFade = useScrollFade<HTMLTextAreaElement>()
+  const statusFade = useScrollFade<HTMLDivElement>()
+  const setTextareaEl = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      textareaRef.current = node
+      textFade.ref(node)
+    },
+    [textFade.ref],
+  )
+
+  // Same path as the audio file input in the "+" menu — also used by drag-and-drop onto the
   // composer shell. Reject non-audio so a stray PDF doesn't silently become
   // the "file" that Send would try to transcribe.
   function attachFile(next: File | null) {
     if (!next) return
     if (!next.type.startsWith("audio/")) {
-      setError("Only audio files can be attached")
+      setError("Only audio files can be attached.")
       return
     }
     setError(null)
@@ -537,27 +588,115 @@ export function ChatComposer({
     attachFile(dropped)
   }
 
-  const attachButton = (
-    <label
-      className={`cursor-pointer rounded-full p-2.5 text-[var(--muted)] hover:bg-[var(--hover)] ${FOCUS_RING}`}
-      aria-label="Attach audio file"
+  // The "+" replaces the old paperclip: hovering opens a menu of things to
+  // add — an audio file to transcribe, or a slide deck. Same popover styling
+  // as the record-source menu below. The audio <input> stays mounted here
+  // (hidden) so the menu item can open its file chooser.
+  const addButton = (
+    <div
+      ref={addMenu.anchorRef}
+      className="relative"
+      onMouseEnter={addMenu.show}
+      onMouseLeave={addMenu.scheduleClose}
     >
-      <Paperclip className="size-5" />
+      <button
+        type="button"
+        onClick={addMenu.show}
+        className={`rounded-full p-2.5 text-[var(--muted)] hover:bg-[var(--hover)] ${FOCUS_RING}`}
+        aria-label="Add files"
+        aria-haspopup="menu"
+        aria-expanded={addMenu.open}
+        title="Add"
+      >
+        <Plus className="size-5" />
+      </button>
       <input
+        ref={audioInputRef}
         type="file"
         accept="audio/*"
         className="hidden"
+        aria-label="Choose an audio file"
         onChange={(e) => {
           attachFile(e.target.files?.[0] ?? null)
           // Allow re-selecting the same file after clearing.
           e.target.value = ""
         }}
       />
-    </label>
+
+      {addMenu.open
+        ? createPortal(
+            <div
+              style={{
+                position: "fixed",
+                top: addMenu.pos.top,
+                left: addMenu.pos.left,
+                transform: "translateY(-100%)",
+              }}
+              className="z-50 pb-2"
+              onMouseEnter={addMenu.show}
+              onMouseLeave={addMenu.scheduleClose}
+            >
+              <div
+                role="menu"
+                aria-label="Add files"
+                className="flex flex-col gap-1.5 rounded-xl border border-border bg-background p-1 shadow-md"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    addMenu.close()
+                    audioInputRef.current?.click()
+                  }}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm whitespace-nowrap text-foreground hover:bg-[var(--hover)] ${FOCUS_RING}`}
+                >
+                  <FileAudio className="size-4" />
+                  Upload audio file
+                </button>
+                {/* One slides item, not two: once a conversation has slides,
+                    "Upload slides" gives way to "Manage slides" — which has its
+                    own "Add more slides" — so the menu never lists both. */}
+                {slides && slides.count > 0 ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      addMenu.close()
+                      slides.onManage()
+                    }}
+                    className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm whitespace-nowrap text-foreground hover:bg-[var(--hover)] ${FOCUS_RING}`}
+                  >
+                    <Presentation className="size-4" />
+                    Manage slides
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!slides?.canUpload}
+                    title={slides?.canUpload ? undefined : "Slides can be added once notes have been generated"}
+                    onClick={() => {
+                      addMenu.close()
+                      slides?.onUpload()
+                    }}
+                    className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm whitespace-nowrap text-foreground hover:bg-[var(--hover)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ${FOCUS_RING}`}
+                  >
+                    <Presentation className="size-4" />
+                    Upload slides
+                  </button>
+                )}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </div>
   )
 
   const statusDisplay = (
     <div
+      ref={statusFade.ref}
+      style={fadeMask(statusFade.edges)}
       className={`thin-scrollbar min-w-0 flex-1 text-base text-[var(--muted)] ${
         isRecordingHere || hasAudio || hasTranscript
           ? "max-h-[200px] overflow-y-auto px-2 break-words whitespace-pre-wrap"
@@ -584,7 +723,7 @@ export function ChatComposer({
       ) : isRecordingHere || hasAudio || hasTranscript ? (
         displayTranscript || (recording.isPaused ? "Paused" : "Listening…")
       ) : (
-        "Record or attach a lecture clip"
+        "Type or record…"
       )}
     </div>
   )
@@ -624,48 +763,47 @@ export function ChatComposer({
   // its own (only hovering used to open the menu; a click without a hover
   // first — touch, or a keyboard Enter/Space on the focused button — used to
   // fall through to starting a mic recording by default instead). The
-  // popover is portaled to document.body (see openSourceMenu/
-  // scheduleCloseSourceMenu above) so it renders above everything —
-  // including the notes sidebar — instead of being clipped by the chat
-  // column's overflow-hidden.
+  // popover is portaled to document.body (see useHoverMenu) so it renders
+  // above everything — including the notes sidebar — instead of being
+  // clipped by the chat column's overflow-hidden.
   const recordButton = (
     <div
-      ref={recordButtonRef}
+      ref={sourceMenu.anchorRef}
       className="relative"
-      onMouseEnter={openSourceMenu}
-      onMouseLeave={scheduleCloseSourceMenu}
+      onMouseEnter={sourceMenu.show}
+      onMouseLeave={sourceMenu.scheduleClose}
     >
       <button
         type="button"
-        onClick={openSourceMenu}
+        onClick={sourceMenu.show}
         className={`rounded-full p-2.5 text-[var(--muted)] hover:bg-[var(--hover)] ${FOCUS_RING}`}
         aria-label="Choose recording source"
         aria-haspopup="menu"
-        aria-expanded={showSourceMenu}
+        aria-expanded={sourceMenu.open}
         title="Record"
       >
         <AudioLines className="size-5" />
       </button>
 
-      {showSourceMenu
+      {sourceMenu.open
         ? createPortal(
             <div
               style={{
                 position: "fixed",
-                top: menuPos.top,
-                left: menuPos.left,
+                top: sourceMenu.pos.top,
+                left: sourceMenu.pos.left,
                 transform: "translateY(-100%)",
               }}
               className="z-50 pb-2"
-              onMouseEnter={openSourceMenu}
-              onMouseLeave={scheduleCloseSourceMenu}
+              onMouseEnter={sourceMenu.show}
+              onMouseLeave={sourceMenu.scheduleClose}
             >
               <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-background p-1 shadow-md">
                 <button
                   type="button"
                   onClick={() => {
-                    setShowSourceMenu(false)
-                  void handleStartRecording("mic")
+                    sourceMenu.close()
+                    void handleStartRecording("mic")
                   }}
                   className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm whitespace-nowrap text-foreground hover:bg-[var(--hover)] ${FOCUS_RING}`}
                 >
@@ -675,8 +813,8 @@ export function ChatComposer({
                 <button
                   type="button"
                   onClick={() => {
-                    setShowSourceMenu(false)
-                  void handleStartRecording("system")
+                    sourceMenu.close()
+                    void handleStartRecording("system")
                   }}
                   className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm whitespace-nowrap text-foreground hover:bg-[var(--hover)] ${FOCUS_RING}`}
                 >
@@ -707,7 +845,12 @@ export function ChatComposer({
   const displayedError = error || (isRecordingHere ? recording.error : null)
 
   return (
-    <div className={`mx-auto w-full max-w-3xl px-6 ${centered ? "pb-0" : "pb-6"}`}>
+    <div
+      className={`mx-auto w-full max-w-3xl px-4 md:px-6 ${
+        // Clears the home-indicator bar on phones (env() is 0 elsewhere).
+        centered ? "pb-0" : "pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+      }`}
+    >
       {displayedError ? (
         <div
           role="alert"
@@ -739,11 +882,12 @@ export function ChatComposer({
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
       >
-        {!stacked ? attachButton : null}
+        {!stacked ? addButton : null}
 
         {showTextarea ? (
             <textarea
-              ref={textareaRef}
+              ref={setTextareaEl}
+              style={fadeMask(textFade.edges)}
               value={text}
             onChange={(e) => {
               setError(null)
@@ -755,12 +899,20 @@ export function ChatComposer({
                   void submit()
                 }
               }}
-              placeholder="Message the AI, or record/attach a clip…"
+              placeholder="Type or record…"
               rows={1}
             // stacked: w-full only — flex-1 in a column was shrinking the
             // box to one line and clipping earlier lines (looked like text
             // "disappeared"). single-row: flex-1 to fill between buttons.
-            className={`thin-scrollbar max-h-[200px] resize-none break-words bg-transparent px-2 py-2.5 text-base leading-normal whitespace-pre-wrap text-foreground outline-none placeholder:text-[var(--muted)] ${
+            //
+            // Empty: nowrap, so the placeholder stays on one line and simply
+            // runs off the edge (clipped) as the composer narrows, instead of
+            // wrapping onto a second line. A textarea's placeholder takes the
+            // element's own white-space, so this is switched to pre-wrap as
+            // soon as there is real text to wrap.
+            className={`thin-scrollbar max-h-[200px] resize-none overflow-x-hidden break-words bg-transparent px-2 py-2.5 text-base leading-normal ${
+              text ? "whitespace-pre-wrap" : "whitespace-nowrap"
+            } text-foreground outline-none placeholder:text-[var(--muted)] ${
               stacked ? "w-full" : "min-w-0 flex-1"
             }`}
             />
@@ -769,7 +921,7 @@ export function ChatComposer({
           )}
 
         <div className={`flex shrink-0 items-center gap-1 ${stacked ? "w-full justify-between" : ""}`}>
-          {stacked ? attachButton : null}
+          {stacked ? addButton : null}
           <div className={`flex items-center gap-1 ${stacked ? "ml-auto" : ""}`}>
             {clearButton}
             {isRecordingHere ? pauseButton : showRecordButton ? recordButton : null}

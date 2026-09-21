@@ -10,6 +10,7 @@ import { createRootRoute, Outlet } from "@tanstack/react-router"
 
 import { Sidebar } from "@/components/sidebar"
 import { ConversationsProvider } from "@/lib/conversations-context"
+import { LayoutProvider } from "@/lib/layout-context"
 import { ProjectsProvider } from "@/lib/projects-context"
 import { RecordingProvider } from "@/lib/recording-context"
 
@@ -22,12 +23,14 @@ export const Route = createRootRoute({
             inside ChatComposer, which meant switching conversations mid-
             recording tore the whole session down. */}
         <RecordingProvider>
-          <div className="flex h-svh bg-background text-foreground">
-            <Sidebar />
-            <div className="flex-1 overflow-hidden">
-              <Outlet />
+          <LayoutProvider>
+            <div className="flex h-svh bg-background text-foreground">
+              <Sidebar />
+              <div className="min-w-0 flex-1 overflow-hidden">
+                <Outlet />
+              </div>
             </div>
-          </div>
+          </LayoutProvider>
         </RecordingProvider>
       </ProjectsProvider>
     </ConversationsProvider>

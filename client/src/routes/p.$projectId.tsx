@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { ProjectFormDialog } from "@/components/project-form-dialog"
 import { ProjectMenu } from "@/components/project-menu"
-import { api } from "@/lib/api"
+import { api, GENERIC_ERROR } from "@/lib/api"
+import { SidebarToggle } from "@/components/sidebar-toggle"
 import { useConversationsContext } from "@/lib/conversations-context"
 import { useProjectsContext } from "@/lib/projects-context"
 
@@ -65,7 +66,7 @@ function ProjectPage() {
       await conversationsCtx.refetch()
       void navigate({ to: "/c/$conversationId", params: { conversationId: conversation.id } })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : GENERIC_ERROR)
       setCreatingChat(false)
     }
   }
@@ -75,7 +76,7 @@ function ProjectPage() {
     try {
       await api.deleteProject(projectId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(err instanceof Error ? err.message : GENERIC_ERROR)
       return
     }
     await Promise.all([projectsCtx.refetch(), conversationsCtx.refetch()])
@@ -85,6 +86,7 @@ function ProjectPage() {
   return (
     <div className="thin-scrollbar h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-2xl px-6 py-8">
+        <SidebarToggle className="-ml-1.5 mb-3" />
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="truncate font-heading text-[26px] font-medium tracking-tight">

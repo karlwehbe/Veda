@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import conversations, health, live_transcribe, profile, projects
+from app.api import conversations, health, live_transcribe, profile, projects, slides
 from app.config import get_settings
 from app.db import init_db
 
@@ -29,7 +29,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="Da Vinci", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Veda", version="0.1.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -44,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(live_transcribe.router)
     app.include_router(profile.router)
     app.include_router(projects.router)
+    app.include_router(slides.router)
 
     return app
 

@@ -14,7 +14,7 @@ async def transcribe_audio(audio_bytes: bytes, settings: Settings) -> str:
     if not settings.deepgram_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Transcription is not configured",
+            detail="Transcription isn't available right now. Please try again later.",
         )
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -35,7 +35,7 @@ async def transcribe_audio(audio_bytes: bytes, settings: Settings) -> str:
         logger.error("Deepgram transcription request failed (%s): %s", response.status_code, response.text)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Transcription failed — please try again.",
+            detail="Transcription failed. Please try again.",
         )
 
     data = response.json()
@@ -44,5 +44,5 @@ async def transcribe_audio(audio_bytes: bytes, settings: Settings) -> str:
     except (KeyError, IndexError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unexpected response from transcription service",
+            detail="Transcription failed. Please try again.",
         ) from exc

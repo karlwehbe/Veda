@@ -54,6 +54,13 @@ RESPONSES: dict[str, dict[str, Any]] = {
         "chat_reply": "A vector has magnitude and direction.",
         "title": "Vectors",
     },
+    # Slide placement. The stub can't know how many slides it was sent, so it
+    # answers for slides 1-4, all "after line 4" (1-based) — the end of the
+    # first bullet list in the NotesUpdate document above. Entries for slides
+    # that weren't sent are ignored by the app.
+    "SlidePlacements": {
+        "placements": [{"slide": n, "after_line": 4} for n in range(1, 5)],
+    },
     "CompiledProfile": {
         "instructions": "Write for a software engineer with some background in the subject.",
     },

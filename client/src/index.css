@@ -72,6 +72,8 @@
      one file instead of hunting through .tsx files. */
   --error-bg: #b91c1a45;
   --overlay: rgb(0 0 0 / 40%);
+  /* Chat message boxes (your messages and uploaded-audio files). */
+  --message: #f2f2f2;
 
   /* shadcn mappings */
   --foreground: var(--text);
