@@ -26,16 +26,29 @@ async function startNotes(page: Page) {
 }
 
 // The "+" in the composer opens on hover, like the record-source menu. The menu
-// is driven by mouseenter, so a hover only opens it if the pointer actually
-// arrives from outside: park the pointer elsewhere first, and retry as a whole
-// (a slow machine can re-render the composer between the hover and the check).
+// is driven by mouseenter, so a hover only opens it when the pointer arrives from
+// outside: park it elsewhere, hover, and poll — a slow machine can re-render the
+// composer between the hover and the check.
 async function openAddMenu(page: Page) {
-  await expect(async () => {
-    await page.mouse.move(5, 5)
-    await page.getByRole("button", { name: "Add files" }).hover()
-    await expect(page.getByRole("menu", { name: "Add files" })).toBeVisible({ timeout: 2_000 })
-  }).toPass({ timeout: 15_000 })
+  const button = page.getByRole("button", { name: "Add files" })
+  const menu = page.getByRole("menu", { name: "Add files" })
+  await expect(button).toBeVisible()
+  await expect(button).toBeEnabled()
+  await expect
+    .poll(
+      async () => {
+        await page.mouse.move(5, 5)
+        await button.hover()
+        return menu.isVisible()
+      },
+      { timeout: 10_000, intervals: [100, 250, 500] },
+    )
+    .toBe(true)
 }
+
+// Width of an element's layout box; 0 while it has none (not laid out yet, or
+// mid re-render), so a polling assertion retries instead of throwing.
+const widthOf = async (loc: Locator) => (await loc.boundingBox())?.width ?? 0
 
 const notesPanel = (page: Page) => page.getByRole("complementary", { name: "Notes" })
 const slideImages = (page: Page) => notesPanel(page).locator("img[src*='/slides/']")
@@ -352,7 +365,8 @@ test.describe("Slides", () => {
 
     // At the default panel width the image simply fills it (under the cap).
     // (Polled: the image can be re-rendered just after it first appears.)
-    await expect.poll(async () => (await image.boundingBox())?.width ?? NaN).toBeLessThan(640)
+    await expect.poll(() => widthOf(image), { timeout: 20_000 }).toBeGreaterThan(0)
+    expect(await widthOf(image)).toBeLessThan(640)
 
     // Make the notes very wide: a big window, then drag the panel's edge out.
     await page.setViewportSize({ width: 1800, height: 900 })
@@ -366,7 +380,7 @@ test.describe("Slides", () => {
     await expect.poll(async () => Math.round((await panel.boundingBox())!.width)).toBeGreaterThan(1000)
 
     // The panel is over 1000px wide, but the slide stops at 640px and is centred.
-    await expect.poll(async () => Math.round((await image.boundingBox())!.width)).toBe(640)
+    await expect.poll(async () => Math.round(await widthOf(image)), { timeout: 20_000 }).toBe(640)
     const p = (await panel.boundingBox())!
     const i = (await image.boundingBox())!
     expect(Math.abs(i.x + i.width / 2 - (p.x + p.width / 2))).toBeLessThan(20)
