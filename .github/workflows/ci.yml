@@ -88,17 +88,47 @@ jobs:
           cache-dependency-path: client/package-lock.json
       - name: Start the stack with a stubbed model
         run: |
+          set -euo pipefail
           # Only the stubbed test API (8001) — not the dev api on 8000.
           docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build db
-          until docker compose exec -T db pg_isready -U postgres; do sleep 1; done
+
+          # A fresh Postgres container starts a temporary server to run its init
+          # scripts, shuts it down, then starts the real one. pg_isready can succeed
+          # against the temporary server, so wait for a real query to work instead.
+          for attempt in {1..60}; do
+            if docker compose ps --status running --services | grep -qx db \
+              && docker compose exec -T db pg_isready -U postgres -d postgres >/dev/null 2>&1 \
+              && docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -Atqc "SELECT 1" >/dev/null 2>&1
+            then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "PostgreSQL did not become stable"
+              docker compose logs db
+              exit 1
+            fi
+            sleep 2
+          done
+
           # CREATE DATABASE via a plain SQL check. \gexec is a psql meta-command
           # and is rejected when passed to psql -c (as happened in CI).
-          docker compose exec -T db \
-            psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'ai_note_taker_system'" \
-            | grep -q 1 \
-            || docker compose exec -T db psql -U postgres -c "CREATE DATABASE ai_note_taker_system"
+          if ! docker compose exec -T db psql -U postgres -d postgres -Atqc \
+            "SELECT 1 FROM pg_database WHERE datname = 'ai_note_taker_system'" | grep -qx 1
+          then
+            docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+              -c "CREATE DATABASE ai_note_taker_system"
+          fi
+
           docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build llm-stub api-test
-          until curl -sf http://localhost:8001/health; do sleep 1; done
+          for attempt in {1..90}; do
+            curl -sf http://localhost:8001/health && break
+            if [ "$attempt" -eq 90 ]; then
+              echo "The test API did not become healthy"
+              docker compose -f docker-compose.yml -f docker-compose.test.yml logs api-test llm-stub
+              exit 1
+            fi
+            sleep 1
+          done
       - name: System tests
         working-directory: server
         run: |
