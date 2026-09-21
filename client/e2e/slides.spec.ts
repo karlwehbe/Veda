@@ -25,10 +25,16 @@ async function startNotes(page: Page) {
   await expect(page.getByRole("heading", { name: "Notes" })).toBeVisible()
 }
 
-// The "+" in the composer opens on hover, like the record-source menu.
+// The "+" in the composer opens on hover, like the record-source menu. The menu
+// is driven by mouseenter, so a hover only opens it if the pointer actually
+// arrives from outside: park the pointer elsewhere first, and retry as a whole
+// (a slow machine can re-render the composer between the hover and the check).
 async function openAddMenu(page: Page) {
-  await page.getByRole("button", { name: "Add files" }).hover()
-  await expect(page.getByRole("menu", { name: "Add files" })).toBeVisible()
+  await expect(async () => {
+    await page.mouse.move(5, 5)
+    await page.getByRole("button", { name: "Add files" }).hover()
+    await expect(page.getByRole("menu", { name: "Add files" })).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 15_000 })
 }
 
 const notesPanel = (page: Page) => page.getByRole("complementary", { name: "Notes" })
@@ -345,8 +351,8 @@ test.describe("Slides", () => {
     await expect(image).toBeVisible()
 
     // At the default panel width the image simply fills it (under the cap).
-    const narrow = (await image.boundingBox())!.width
-    expect(narrow).toBeLessThan(640)
+    // (Polled: the image can be re-rendered just after it first appears.)
+    await expect.poll(async () => (await image.boundingBox())?.width ?? NaN).toBeLessThan(640)
 
     // Make the notes very wide: a big window, then drag the panel's edge out.
     await page.setViewportSize({ width: 1800, height: 900 })
