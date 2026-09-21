@@ -265,7 +265,20 @@ test.describe("Chat styling", () => {
 test.describe("Error messages", () => {
   const GENERIC = "Something went wrong. Please try again."
 
+  // The failed send has already created its (empty) conversation and the page
+  // never leaves "/", so the afterEach above cannot find it by URL: note the id
+  // from the create response and remove it here.
+  const created: string[] = []
+  test.afterEach(async ({ request }) => {
+    for (const id of created.splice(0)) await request.delete(`${API}/conversations/${id}`)
+  })
+
   async function sendAndReadError(page: Page, respond: Parameters<Page["route"]>[1]) {
+    page.on("response", async (res) => {
+      if (res.request().method() === "POST" && new URL(res.url()).pathname === "/conversations" && res.ok()) {
+        created.push((await res.json()).id)
+      }
+    })
     await page.goto("/")
     await page.route("**/messages", respond)
     await page.getByPlaceholder(COMPOSER).fill("a vector has magnitude")
