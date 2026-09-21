@@ -1,5 +1,9 @@
 # Veda
 
+<video src="Demo.mp4" controls muted width="100%">
+  Your browser can't play this video. <a href="Demo.mp4">Watch the demo</a>.
+</video>
+
 Record a lecture and watch a notes document write itself.
 
 Speech is transcribed live (Deepgram), and every turn an LLM decides whether the
