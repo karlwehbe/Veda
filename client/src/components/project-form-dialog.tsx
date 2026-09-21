@@ -5,7 +5,7 @@
 // wherever that menu appears (its sidebar row, its own page header).
 import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
-import { AlertCircle, Loader2 } from "lucide-react"
+import { AlertCircle, Loader2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { api, GENERIC_ERROR } from "@/lib/api"
@@ -45,6 +45,10 @@ export function ProjectFormDialog({ open, project = null, onSaved, onCancel }: P
     setDescription(project?.description ?? "")
     setInstructions(project?.instructions ?? "")
     setError(null)
+    // A successful save leaves busy set (the parent closes the dialog), and this
+    // component stays mounted while closed — without this, the next open would
+    // show the Save button still spinning.
+    setBusy(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, project?.id])
 
@@ -89,9 +93,20 @@ export function ProjectFormDialog({ open, project = null, onSaved, onCancel }: P
         className="w-full max-w-md rounded-2xl border border-border bg-background p-5 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 id="project-form-title" className="font-heading text-lg font-medium tracking-tight">
-          {isEdit ? "Edit project" : "New project"}
-        </h2>
+        <div className="flex items-start justify-between gap-4">
+          <h2 id="project-form-title" className="font-heading text-lg font-medium tracking-tight">
+            {isEdit ? "Edit project" : "New project"}
+          </h2>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className={`-m-1 shrink-0 rounded-full p-1 text-[var(--muted)] hover:bg-[var(--hover)] disabled:opacity-50 ${FOCUS_RING}`}
+            aria-label="Close"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
 
         <div className="mt-4 space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -152,9 +167,6 @@ export function ProjectFormDialog({ open, project = null, onSaved, onCancel }: P
         ) : null}
 
         <div className="mt-5 flex justify-end gap-2">
-          <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
-            Cancel
-          </Button>
           <Button type="button" onClick={() => void handleSubmit()} disabled={busy}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : isEdit ? "Save" : "Create"}
           </Button>

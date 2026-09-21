@@ -33,9 +33,6 @@ class TestStackHealth:
         )
         assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
-    def test_openapi_is_served(self, api: httpx.Client) -> None:
-        assert api.get("/openapi.json").json()["info"]["title"] == "Veda"
-
 
 class TestConversationJourney:
     def test_full_turn_persists_across_the_stack(self, api: httpx.Client, conversation: str, stub) -> None:

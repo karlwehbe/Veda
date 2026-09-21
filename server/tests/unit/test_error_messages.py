@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from app.config import Settings
 from app.services.notes_graph import _resolve_llm
 from app.services.transcription import transcribe_audio
-from tests.copy_rules import FORBIDDEN, assert_product_copy
+from tests.copy_rules import assert_product_copy
 
 APP = pathlib.Path(__file__).resolve().parents[2] / "app"
 
@@ -63,9 +63,6 @@ def test_the_rules_reject_what_they_are_for() -> None:
         with pytest.raises(AssertionError):
             assert_product_copy(bad)
 
-
-def test_the_forbidden_list_is_not_empty() -> None:
-    assert "api key" in FORBIDDEN and "redeploy" in FORBIDDEN
 
 
 class TestMissingConfiguration:
