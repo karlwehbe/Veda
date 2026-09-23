@@ -47,7 +47,7 @@ sequenceDiagram
   WS->>DG: relayed unchanged
   DG-->>WS: interim and final results
   WS-->>RC: { transcript, is_final }
-  RC->>API: PATCH /draft on each final segment
+  RC->>API: PATCH /draft/append on each final segment (batched, retried on failure)
   U->>RC: send
   RC->>API: POST /messages (transcript + filename=recording.webm)
   Note over API: no audio file, so no batch transcription
@@ -117,11 +117,23 @@ shows a small pulsing red dot while a recording is live. See [Layout](../layout/
 
 ### Draft autosave
 
-Each final Deepgram segment (and pause) does `PATCH /conversations/{id}/draft`. After a
-crash or a reload, `GET /conversations/{id}` returns `draft_transcript` and the composer
-restores it, so a tab dying mid-lecture does not lose it. A successful send clears it.
-Guards stop a late WebSocket message from resurrecting a draft the user discarded
-(`allowDraftSaveRef`, and clearing `onmessage` before closing).
+Each final Deepgram segment (and pause) autosaves — but not one call each: a short
+batching delay lets several finals arriving in a burst share one request
+(`scheduleDraftSave`; pausing flushes immediately instead of waiting,
+`flushDraftSave`), and only the newest text is sent, via `PATCH
+/conversations/{id}/draft/append`, not the whole transcript so far. The server stores
+each append as its own row (`draft_chunks`) rather than rewriting one growing column,
+so autosaving stays cheap regardless of how long the recording has run — see
+[Conversations](../conversations/README.md#data-and-api). A failed append retries on
+its own with jittered exponential backoff rather than waiting for the next final to
+happen to cover it.
+
+After a crash or a reload, `GET /conversations/{id}` reassembles those chunks into
+`draft_transcript` and the composer restores it, so a tab dying mid-lecture does not
+lose it. A successful send clears the draft (`PATCH /conversations/{id}/draft`, the
+full-replace endpoint, used only to reset it to nothing). Guards stop a late WebSocket
+message from resurrecting a draft the user discarded (`allowDraftSaveRef`, and clearing
+`onmessage` before closing).
 
 ## Data and API
 

@@ -25,11 +25,6 @@ class Conversation(Base):
     # user chats with the AI to refine it. Separate from Message.content,
     # which is just the short conversational reply shown in the chat thread.
     note_content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Periodically autosaved from the live transcript while recording is in
-    # progress — a safety net so a long recording isn't lost if the tab
-    # crashes or the user navigates away before Send. Cleared once a real
-    # Message is created on send.
-    draft_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -46,4 +41,12 @@ class Conversation(Base):
     )
     decks = relationship(
         "SlideDeck", back_populates="conversation", cascade="all, delete-orphan", order_by="SlideDeck.created_at"
+    )
+    # Periodically autosaved from the live transcript while recording is in
+    # progress — a safety net so a long recording isn't lost if the tab
+    # crashes or the user navigates away before Send. Cleared once a real
+    # Message is created on send. Stored as chunks (see DraftChunk), not a
+    # single rewritten column, so autosaving stays cheap as a draft grows.
+    draft_chunks = relationship(
+        "DraftChunk", back_populates="conversation", cascade="all, delete-orphan", order_by="DraftChunk.id"
     )

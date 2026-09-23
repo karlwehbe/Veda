@@ -194,8 +194,9 @@ export const api = {
       body: formData,
     })
   },
-  // Fire-and-forget autosave of the transcript captured so far while a
-  // recording is in progress — see conversations.py's save_draft.
+  // Resets the autosaved draft outright (discarding a recording, or clearing
+  // a restored one) — see conversations.py's save_draft. Never used to save
+  // an in-progress recording's growing transcript; see appendDraftTranscript.
   // keepalive: true so the request still completes when the composer
   // unmounts mid-navigation (otherwise the browser may cancel it).
   saveDraftTranscript: (conversationId: string, transcript: string) =>
@@ -203,6 +204,16 @@ export const api = {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ transcript }),
+      keepalive: true,
+    }),
+  // Fire-and-forget autosave while a recording is in progress — appends just
+  // the newest chunk of transcript rather than resending everything, see
+  // conversations.py's append_draft.
+  appendDraftTranscript: (conversationId: string, text: string) =>
+    request<void>(`/conversations/${conversationId}/draft/append`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
       keepalive: true,
     }),
   // Keeps the whole PDF with the conversation — a thumbnail and the text of every

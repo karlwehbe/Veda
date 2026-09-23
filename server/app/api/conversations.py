@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import Conversation, Message, Project
+from app.models import Conversation, DraftChunk, Message, Project
 from app.services.notes_graph import generate_response
 from app.services.slides import notes_with_slides, sync_slide_placements
 from app.services.transcription import transcribe_audio
@@ -45,7 +45,10 @@ class ConversationOut(BaseModel):
 class ConversationDetailOut(ConversationOut):
     messages: list[MessageOut]
     note_content: str | None
-    draft_transcript: str | None
+    # Default so model_validate doesn't need this attribute on the ORM
+    # object — it's always overwritten right after with _load_draft_transcript,
+    # same as note_content/slide_count below.
+    draft_transcript: str | None = None
     # Every page kept for editing, in the notes or not — so the client knows a
     # deck exists (and offers "Manage slides") even when nothing is included.
     slide_count: int = 0
@@ -64,6 +67,13 @@ def _get_conversation_or_404(conversation_id: uuid.UUID, db: Session) -> Convers
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="We couldn't find that conversation. It may have been deleted.")
     return conversation
+
+
+def _load_draft_transcript(conversation_id: uuid.UUID, db: Session) -> str | None:
+    chunks = db.scalars(
+        select(DraftChunk.text).where(DraftChunk.conversation_id == conversation_id).order_by(DraftChunk.id)
+    ).all()
+    return " ".join(chunks) if chunks else None
 
 
 @router.post("/conversations", response_model=ConversationOut)
@@ -99,6 +109,7 @@ def get_conversation(conversation_id: uuid.UUID, db: Session = Depends(get_db)) 
     # image markdown injected (see app/services/slides.py).
     out.note_content = notes_with_slides(conversation.note_content, conversation.slides)
     out.slide_count = len(conversation.slides)
+    out.draft_transcript = _load_draft_transcript(conversation.id, db)
     return out
 
 
@@ -114,18 +125,46 @@ class DraftIn(BaseModel):
     transcript: str
 
 
-# Called periodically by the client while a recording is in progress, so the
-# transcript captured so far survives a crash/reload even before the user
-# gets to Send — overwrites draft_transcript wholesale each time rather than
-# appending, since the client always sends the full accumulated transcript.
+# Resets draft_transcript wholesale — used to clear it outright (discarding a
+# recording, or the user manually clearing a restored draft), never to save
+# the growing transcript of an in-progress recording; see append_draft below
+# for that.
 @router.patch("/conversations/{conversation_id}/draft", status_code=status.HTTP_204_NO_CONTENT)
 def save_draft(conversation_id: uuid.UUID, payload: DraftIn, db: Session = Depends(get_db)) -> None:
-    conversation = _get_conversation_or_404(conversation_id, db)
-    conversation.draft_transcript = payload.transcript
+    _get_conversation_or_404(conversation_id, db)
+    # Full replace: drop whatever chunks exist, then start over with one
+    # chunk holding the given text (none, if it's empty — this is how both
+    # callers actually use it, to clear the draft outright).
+    db.query(DraftChunk).filter(DraftChunk.conversation_id == conversation_id).delete()
+    if payload.transcript:
+        db.add(DraftChunk(conversation_id=conversation_id, text=payload.transcript))
     db.commit()
     # DEBUG, not INFO — this fires every few seconds for the whole duration
     # of a recording and would otherwise drown out the rest of the workflow.
     logger.debug("[%s] draft autosaved (%d chars)", conversation_id, len(payload.transcript))
+
+
+class DraftAppendIn(BaseModel):
+    text: str
+
+
+# Called periodically by the client while a recording is in progress, so the
+# transcript captured so far survives a crash/reload even before the user
+# gets to Send. Appends only the newest chunk rather than resending
+# everything — resending the whole transcript on every save (the old
+# behavior of the endpoint above) made total bytes moved grow with the
+# square of the recording's length. The join matches how the client itself
+# assembles the transcript (finalTranscript + " " + interim).
+@router.patch("/conversations/{conversation_id}/draft/append", status_code=status.HTTP_204_NO_CONTENT)
+def append_draft(conversation_id: uuid.UUID, payload: DraftAppendIn, db: Session = Depends(get_db)) -> None:
+    _get_conversation_or_404(conversation_id, db)
+    if not payload.text:  # defensive — the client never sends an empty chunk
+        return
+    # No read of the existing draft — appending is a plain insert, so its cost
+    # never grows with how long the draft already is. See models/draft_chunk.py.
+    db.add(DraftChunk(conversation_id=conversation_id, text=payload.text))
+    db.commit()
+    logger.debug("[%s] draft appended (%d chars)", conversation_id, len(payload.text))
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageTurnOut)
@@ -190,7 +229,7 @@ async def send_message(
     # Persist the user turn immediately so a crash mid-generation doesn't lose
     # what they sent. Cleared again below if the model call fails, so a soft
     # failure can restore the text into the composer for a clean retry.
-    conversation.draft_transcript = None
+    db.query(DraftChunk).filter(DraftChunk.conversation_id == conversation.id).delete()
     conversation.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(user_message)

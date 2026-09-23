@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.models import Conversation, Message
+from app.models import Conversation, DraftChunk, Message
 from app.services.notes_graph import TurnResult
 
 NOTES = "# Vectors\n\nA vector has magnitude and direction."
@@ -69,6 +69,13 @@ def _make_conversation(db: Session, **kwargs) -> Conversation:
     return conversation
 
 
+def _seed_draft_chunk(db: Session, conversation: Conversation, text: str) -> None:
+    # The draft is stored as chunks now (see models/draft_chunk.py), not a
+    # column on Conversation itself — seed it the same way append_draft would.
+    db.add(DraftChunk(conversation_id=conversation.id, text=text))
+    db.commit()
+
+
 class TestConversationLifecycle:
     def test_create_returns_the_placeholder_title(self, client: TestClient) -> None:
         response = client.post("/conversations")
@@ -104,6 +111,35 @@ class TestDraftAutosave:
         for text in ("one", "one two"):
             client.patch(f"/conversations/{conversation.id}/draft", json={"transcript": text})
         assert client.get(f"/conversations/{conversation.id}").json()["draft_transcript"] == "one two"
+
+
+class TestDraftAppend:
+    def test_append_to_empty_draft(self, client: TestClient, db: Session) -> None:
+        conversation = _make_conversation(db)
+        assert client.patch(
+            f"/conversations/{conversation.id}/draft/append", json={"text": "half a lecture"}
+        ).status_code == 204
+        assert client.get(f"/conversations/{conversation.id}").json()["draft_transcript"] == "half a lecture"
+
+    def test_append_joins_with_a_space(self, client: TestClient, db: Session) -> None:
+        # Matches how the client itself assembles the transcript.
+        conversation = _make_conversation(db)
+        for text in ("one", "two"):
+            client.patch(f"/conversations/{conversation.id}/draft/append", json={"text": text})
+        assert client.get(f"/conversations/{conversation.id}").json()["draft_transcript"] == "one two"
+
+    def test_many_appends_reassemble_in_insertion_order(self, client: TestClient, db: Session) -> None:
+        # Chunks are stored as separate rows now (models/draft_chunk.py) —
+        # this is the guarantee that didn't need proving with a single column.
+        conversation = _make_conversation(db)
+        words = [f"word{i}" for i in range(20)]
+        for word in words:
+            client.patch(f"/conversations/{conversation.id}/draft/append", json={"text": word})
+        assert client.get(f"/conversations/{conversation.id}").json()["draft_transcript"] == " ".join(words)
+
+    def test_append_to_missing_conversation_is_404(self, client: TestClient) -> None:
+        response = client.patch(f"/conversations/{uuid.uuid4()}/draft/append", json={"text": "x"})
+        assert response.status_code == 404
 
 
 class TestSendMessage:
@@ -182,10 +218,10 @@ class TestSendMessage:
 
     def test_sending_clears_the_draft(self, client: TestClient, db: Session, stub_llm) -> None:
         stub_llm()
-        conversation = _make_conversation(db, draft_transcript="stale draft")
+        conversation = _make_conversation(db)
+        _seed_draft_chunk(db, conversation, "stale draft")
         client.post(f"/conversations/{conversation.id}/messages", data={"transcript": "lecture"})
-        db.refresh(conversation)
-        assert conversation.draft_transcript is None
+        assert db.query(DraftChunk).filter_by(conversation_id=conversation.id).count() == 0
 
     def test_prior_turns_are_passed_as_history(self, client: TestClient, db: Session, stub_llm) -> None:
         # The routing rules depend on seeing the previous assistant turn.
@@ -267,9 +303,10 @@ class TestSendMessageRejections:
         # the model call fails, so a soft failure can restore the text"), but
         # the failure path only deletes the message. A tab crash here loses it.
         stub_llm(raises=RuntimeError("model exploded"))
-        conversation = _make_conversation(db, draft_transcript="an hour of lecture")
+        conversation = _make_conversation(db)
+        _seed_draft_chunk(db, conversation, "an hour of lecture")
 
         client.post(f"/conversations/{conversation.id}/messages", data={"transcript": "an hour of lecture"})
 
-        db.refresh(conversation)
-        assert conversation.draft_transcript == "an hour of lecture"
+        chunks = db.query(DraftChunk).filter_by(conversation_id=conversation.id).order_by(DraftChunk.id).all()
+        assert " ".join(c.text for c in chunks) == "an hour of lecture"

@@ -142,6 +142,20 @@ def init_db() -> None:
         # A page that isn't in the notes has no full-size render.
         conn.execute(text("ALTER TABLE slides ALTER COLUMN image DROP NOT NULL"))
 
+        # draft_transcript's replacement: the draft is now a sequence of small
+        # appended rows (draft_chunks, a wholly new table created by create_all()
+        # above) instead of one column rewritten in full on every autosave — see
+        # models/draft_chunk.py. The old column only ever held disposable
+        # autosave scratch (never a durable record of anything), so it's dropped
+        # rather than migrated.
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_draft_chunks_conversation_id "
+                "ON draft_chunks (conversation_id, id)"
+            )
+        )
+        conn.execute(text("ALTER TABLE conversations DROP COLUMN IF EXISTS draft_transcript"))
+
 
 def check_db_connection() -> bool:
     try:

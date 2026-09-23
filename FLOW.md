@@ -81,6 +81,7 @@ erDiagram
   CONVERSATIONS ||--o{ SLIDE_DECKS : has
   CONVERSATIONS ||--o{ SLIDES : has
   SLIDE_DECKS ||--o{ SLIDES : "one per page"
+  CONVERSATIONS ||--o{ DRAFT_CHUNKS : has
 
   PROJECTS {
     uuid id PK
@@ -94,9 +95,14 @@ erDiagram
     string title "AI-generated on the first turn"
     uuid project_id FK "NULL = not in a project"
     text note_content "the evolving notes document — never holds slides"
-    text draft_transcript "autosaved mid-recording, cleared on send"
     timestamp created_at
     timestamp updated_at
+  }
+  DRAFT_CHUNKS {
+    bigint id PK "bigserial — insertion order is the sort order"
+    uuid conversation_id FK
+    text text "one appended piece; reassembled into draft_transcript on read"
+    timestamp created_at
   }
   MESSAGES {
     uuid id PK
@@ -221,7 +227,7 @@ Knowing where a piece of state lives is most of knowing where a bug can be.
 | State | Lives in | Survives a reload? |
 | --- | --- | --- |
 | Conversations, messages, notes | Postgres | yes |
-| The autosaved draft transcript | Postgres (`draft_transcript`) | yes |
+| The autosaved draft transcript | Postgres (`draft_chunks`) | yes |
 | Kept slide decks and their pages | Postgres | yes |
 | The profile, projects | Postgres | yes |
 | An in-progress recording (mic, socket, live transcript) | `RecordingProvider`, in memory, above the router | no — hence the draft |

@@ -51,6 +51,37 @@ type RecordingContextValue = {
   clearError: () => void
 }
 
+// How long a draft save waits before actually sending, so several triggers
+// arriving close together (a burst of short finals) land in one request
+// instead of one each. Small enough that the worst-case unsaved window on a
+// crash barely changes; see scheduleDraftSave.
+const DRAFT_SAVE_DEBOUNCE_MS = 1500
+
+// The browser's default MediaRecorder bitrate is tuned for general audio, well
+// above what a single spoken voice needs. Speech intelligibility holds up fine
+// well below this; audio is by far the largest thing this feature streams
+// (megabytes over a session, versus kilobytes for transcript/draft traffic), so
+// this is the highest-leverage bandwidth cut available here.
+const RECORDING_AUDIO_BITRATE = 32_000
+
+// A failed draft save is retried automatically with exponential backoff —
+// otherwise it only gets folded into whatever the next final/pause happens to
+// send, which may never come. Capped, not capped-attempts: a dropped
+// connection can come back at any point in a long recording, so it keeps
+// trying at the ceiling rather than giving up.
+const DRAFT_SAVE_RETRY_BASE_MS = 2_000
+const DRAFT_SAVE_RETRY_MAX_MS = 30_000
+
+// Full jitter (pick uniformly between 0 and the exponential delay, rather
+// than a fixed schedule) matters once this runs for many concurrent users:
+// a shared blip — a deploy, a brief DB hiccup — would otherwise have every
+// affected client retry at the exact same moments, turning a brief outage
+// into a synchronized wave of retries hitting the server back at once.
+function nextDraftRetryDelayMs(attempt: number): number {
+  const ceiling = Math.min(DRAFT_SAVE_RETRY_MAX_MS, DRAFT_SAVE_RETRY_BASE_MS * 2 ** attempt)
+  return Math.random() * ceiling
+}
+
 const RecordingContext = createContext<RecordingContextValue | null>(null)
 
 // Split out from RecordingContext on purpose: this updates every 100ms while
@@ -150,6 +181,32 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
   const streamRef = useRef<MediaStream | null>(null)
   const finalTranscriptRef = useRef("")
   const interimTranscriptRef = useRef("")
+  // How many characters of finalTranscriptRef the server has confirmed
+  // saved — lets performSave append just the new tail instead of resending
+  // everything. Left alone on a failed save, so the unsent text is simply
+  // included in the next attempt rather than lost (the same self-healing
+  // property a full resend had). Reset to 0 wherever finalTranscriptRef
+  // itself is reset to start a fresh session.
+  const savedThroughRef = useRef(0)
+  // Serializes saves so at most one appendDraftTranscript call is ever in
+  // flight: savingRef marks that one's running, retryNeededRef records that
+  // something else arrived while it was busy. No separate queue of chunks is
+  // needed — a retry just calls performSave again, which recomputes the
+  // chunk live from the current refs, so it naturally picks up everything
+  // that accumulated in the meantime.
+  const savingRef = useRef(false)
+  const retryNeededRef = useRef(false)
+  // Batches saves triggered close together (e.g. several finals in a quick
+  // burst of speech) into one request instead of one per trigger — see
+  // scheduleDraftSave. Bounded rather than a sliding debounce: it does not
+  // reset on every new trigger, so the worst-case delay is always this one
+  // constant, however long the burst goes on.
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Consecutive draft-save failures since the last success — drives the
+  // exponential backoff delay; a scheduled retry timer, separate from
+  // saveTimeoutRef's batching delay.
+  const draftRetryAttemptRef = useRef(0)
+  const draftRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingConversationIdRef = useRef<string | null>(null)
   const allowDraftSaveRef = useRef(true)
   const stopResolveRef = useRef<((result: FinalizedRecording | null) => void) | null>(null)
@@ -162,14 +219,89 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     setLiveTranscript([finalTranscriptRef.current, interimTranscriptRef.current].filter(Boolean).join(" "))
   }
 
-  function saveDraftNow() {
+  // The actual network call — single-flight (see savingRef's comment above).
+  // Called either after scheduleDraftSave's delay, or immediately by
+  // flushDraftSave. Not called directly from anywhere else; go through one
+  // of those two so bursts of triggers get batched.
+  function performSave() {
     if (!allowDraftSaveRef.current) return
+    // Never run two saves at once — a final arriving mid-save would otherwise
+    // compute its own chunk from the same not-yet-advanced savedThroughRef,
+    // overlapping with the one already in flight. Just flag that a retry is
+    // owed once the current save settles.
+    if (savingRef.current) {
+      retryNeededRef.current = true
+      return
+    }
     const targetId = recordingConversationId ?? pendingConversationIdRef.current
-    const transcript = [finalTranscriptRef.current, interimTranscriptRef.current].filter(Boolean).join(" ").trim()
-    if (!targetId || !transcript) return
-    void api.saveDraftTranscript(targetId, transcript).catch((err) => {
-      console.error("Failed to save draft transcript", err)
-    })
+    // Only the newest final text plus whatever's currently interim — interim
+    // isn't confirmed yet (it can still change), so it's never folded into
+    // savedThroughRef and gets resent, as part of the next chunk, once it
+    // finalizes or the transcript stops changing.
+    const newFinal = finalTranscriptRef.current.slice(savedThroughRef.current)
+    const chunk = [newFinal, interimTranscriptRef.current].filter(Boolean).join(" ").trim()
+    if (!targetId || !chunk) return
+    const confirmsThrough = finalTranscriptRef.current.length
+    savingRef.current = true
+    // savedThroughRef only advances once this call's chunk is confirmed saved
+    // (not optimistically at send time), so a failed save is naturally
+    // resent as part of the next attempt.
+    void api.appendDraftTranscript(targetId, chunk)
+      .then(() => {
+        savedThroughRef.current = confirmsThrough
+        draftRetryAttemptRef.current = 0
+        // A natural trigger's save can succeed and make an already-scheduled
+        // backoff retry (from an earlier failure) redundant — cancel it
+        // rather than let it fire and find nothing left to send.
+        if (draftRetryTimeoutRef.current) {
+          clearTimeout(draftRetryTimeoutRef.current)
+          draftRetryTimeoutRef.current = null
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to save draft transcript", err)
+        const attempt = draftRetryAttemptRef.current
+        draftRetryAttemptRef.current = attempt + 1
+        if (draftRetryTimeoutRef.current) clearTimeout(draftRetryTimeoutRef.current)
+        draftRetryTimeoutRef.current = setTimeout(() => {
+          draftRetryTimeoutRef.current = null
+          performSave()
+        }, nextDraftRetryDelayMs(attempt))
+      })
+      .finally(() => {
+        savingRef.current = false
+        if (retryNeededRef.current) {
+          retryNeededRef.current = false
+          // Immediate, not scheduleDraftSave — this is catching up on text
+          // that arrived while busy, not a fresh burst to batch.
+          performSave()
+        }
+      })
+  }
+
+  // Called after each final: schedules a save rather than sending right away,
+  // so several finals landing in a quick burst share one request. Bounded,
+  // not a resetting debounce — a call while one is already scheduled changes
+  // nothing (the pending save will pick up the new text too, once it fires),
+  // so the delay never grows past DRAFT_SAVE_DEBOUNCE_MS regardless of how
+  // long the burst continues.
+  function scheduleDraftSave() {
+    if (saveTimeoutRef.current) return
+    saveTimeoutRef.current = setTimeout(() => {
+      saveTimeoutRef.current = null
+      performSave()
+    }, DRAFT_SAVE_DEBOUNCE_MS)
+  }
+
+  // Saves right away, skipping any pending batch delay — for triggers that
+  // are already infrequent on their own (pausing), where there's nothing to
+  // batch and no reason to wait.
+  function flushDraftSave() {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = null
+    }
+    performSave()
   }
 
   // Elapsed-time clock — only ticks while actually recording and unpaused.
@@ -231,6 +363,21 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     pendingConversationIdRef.current = null
     setRecordingConversationId(conversationId)
     finalTranscriptRef.current = seedTranscript?.trim() ?? ""
+    // A seed transcript is a previously-restored draft, already sitting in
+    // draft_transcript on the server — mark it as already saved so the first
+    // append sends only genuinely new speech, not the whole seed again.
+    savedThroughRef.current = finalTranscriptRef.current.length
+    savingRef.current = false
+    retryNeededRef.current = false
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = null
+    }
+    draftRetryAttemptRef.current = 0
+    if (draftRetryTimeoutRef.current) {
+      clearTimeout(draftRetryTimeoutRef.current)
+      draftRetryTimeoutRef.current = null
+    }
     interimTranscriptRef.current = ""
     updateLiveDisplay()
     setElapsedSeconds(0)
@@ -271,7 +418,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         if (data.is_final) {
           finalTranscriptRef.current = [finalTranscriptRef.current, data.transcript].filter(Boolean).join(" ")
           interimTranscriptRef.current = ""
-          saveDraftNow()
+          scheduleDraftSave()
         } else {
           interimTranscriptRef.current = data.transcript
         }
@@ -309,7 +456,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         ws.addEventListener("error", onError, { once: true })
       })
 
-      const recorder = new MediaRecorder(stream)
+      const recorder = new MediaRecorder(stream, { audioBitsPerSecond: RECORDING_AUDIO_BITRATE })
       // Chunks go only to Deepgram live — no in-memory blob for upload.
       // File uploads are a separate path that attaches a user-picked file.
       recorder.ondataavailable = (e) => {
@@ -362,7 +509,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     } else {
       recorder.pause()
       setIsPaused(true)
-      saveDraftNow()
+      flushDraftSave()
     }
   }
 
@@ -408,6 +555,18 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       stopAudioLevelMeter()
     }
     finalTranscriptRef.current = ""
+    savedThroughRef.current = 0
+    savingRef.current = false
+    retryNeededRef.current = false
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = null
+    }
+    draftRetryAttemptRef.current = 0
+    if (draftRetryTimeoutRef.current) {
+      clearTimeout(draftRetryTimeoutRef.current)
+      draftRetryTimeoutRef.current = null
+    }
     interimTranscriptRef.current = ""
     setLiveTranscript("")
     setIsRecording(false)

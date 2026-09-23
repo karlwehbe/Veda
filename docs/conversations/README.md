@@ -105,17 +105,21 @@ up by the conversation page on mount.
 ## Data and API
 
 `conversations`: `id`, `title` (default `"New conversation"`), `project_id` (nullable,
-`ON DELETE CASCADE`), `note_content`, `draft_transcript`, `created_at`, `updated_at`.
+`ON DELETE CASCADE`), `note_content`, `created_at`, `updated_at`.
 `messages`: `id`, `conversation_id` (`ON DELETE CASCADE`), `role` (`user` | `assistant`),
 `content`, `filename`, `created_at`.
+`draft_chunks`: `id` (bigserial), `conversation_id` (`ON DELETE CASCADE`), `text`,
+`created_at` — one row per autosaved chunk (see Design decisions below); `GET
+/conversations/{id}` reassembles them into a single `draft_transcript` string.
 
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /conversations[?project_id=]` | Create. A `project_id` files it in that project (404 if unknown) |
 | `GET /conversations` | The sidebar list, most recently updated first |
 | `GET /conversations/{id}` | Messages, notes (with slides injected), `slide_count`, any autosaved draft |
-| `DELETE /conversations/{id}` | Cascades to messages, slides and decks |
-| `PATCH /conversations/{id}/draft` | Overwrite the autosaved transcript (204) |
+| `DELETE /conversations/{id}` | Cascades to messages, slides, decks and draft chunks |
+| `PATCH /conversations/{id}/draft` | Replace the autosaved transcript wholesale — used only to clear it (204) |
+| `PATCH /conversations/{id}/draft/append` | Add one chunk to the autosaved transcript (204) |
 | `POST /conversations/{id}/messages` | One turn (above) |
 
 Limits: an uploaded audio file is capped at 25 MB (Deepgram's own limit); a title is cut
@@ -123,9 +127,13 @@ to 60 characters.
 
 ## Design decisions
 
-- **The draft is overwritten, not appended.** The client always sends the whole
-  transcript so far, so the server just replaces it. It is only a crash-recovery net and
-  is cleared by a successful send.
+- **The draft is stored as appended chunks, not one rewritten column.** Each autosave
+  sends just the newest bit of text (`PATCH .../draft/append`), stored as its own row in
+  `draft_chunks` — a plain insert, cheap regardless of how long the draft already is.
+  `PATCH .../draft` (full replace) exists only to clear it outright, which the client
+  does by sending an empty string; `GET /conversations/{id}` reassembles the chunks,
+  in order, into the `draft_transcript` string the client actually reads. It is only a
+  crash-recovery net and is cleared by a successful send.
 - **`GET /conversations/{id}` is refetched on every visit** (`staleTime: 0`,
   `gcTime: 0`). A cached copy would carry `draft_transcript: null` from before the user
   started recording and restore the wrong thing.

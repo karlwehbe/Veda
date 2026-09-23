@@ -267,7 +267,8 @@ destructive schema change has to be handled by hand, or with `./setup.sh --reset
 | `GET /conversations` | Sidebar list |
 | `GET /conversations/{id}` | Messages + notes (with slides) + `slide_count` + any autosaved draft |
 | `DELETE /conversations/{id}` | Cascades to messages, slides and decks |
-| `PATCH /conversations/{id}/draft` | Autosave the in-progress transcript |
+| `PATCH /conversations/{id}/draft` | Replace the autosaved transcript wholesale (used only to clear it) |
+| `PATCH /conversations/{id}/draft/append` | Autosave the in-progress transcript, one chunk at a time |
 | `POST /conversations/{id}/messages` | One turn: audio and/or text in, notes + reply out |
 | `WS /ws/transcribe` | Deepgram live-streaming proxy |
 | `GET·PUT·DELETE /profile` | The personal context form |
