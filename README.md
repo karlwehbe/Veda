@@ -1,6 +1,6 @@
 # Veda
 
-https://github.com/user-attachments/assets/1b1496bd-8a14-421e-afac-005f8f98bc32
+https://github.com/user-attachments/assets/21f52790-bde3-4040-910e-19df3af3561b
 
 Record a lecture and watch a notes document write itself.
 
