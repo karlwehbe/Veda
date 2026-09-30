@@ -53,7 +53,7 @@ sequenceDiagram
 | Action | Work done |
 | --- | --- |
 | Upload a PDF | A thumbnail and the text of every page; the PDF is stored. No full-size render, no model call. |
-| Tick pages | A full-size render of *those pages*, from the stored PDF, then a placement call for *those slides only*. Slides already in the notes resolve by string match and are never re-sent to the model. |
+| Tick pages | A full-size render of *those pages*, from the stored PDF, then a placement call for *those slides only*. Slides already in the notes keep their block and are never re-sent to the model. |
 | Untick pages | Those slides leave the notes and drop their full-size image. Nothing else is re-run and no model is called. They stay in the deck. |
 | Tick a removed page again | The same as a new page — rendered from the kept PDF, no upload. |
 | Remove a PDF | The deck and all its pages are deleted. |
@@ -68,7 +68,7 @@ stateDiagram-v2
   Hidden --> InNotes: a notes update gives it a spot
   InNotes --> InDeck: unticked
   Hidden --> InDeck: unticked
-  InNotes --> Hidden: the notes are rewritten and its spot is lost
+  InNotes --> Hidden: its block is deleted
 ```
 
 *InDeck* pages have a thumbnail and text but no full-size image. *Hidden* pages are
@@ -76,31 +76,34 @@ included but not placed: kept, out of the notes, retried after every notes updat
 
 ### Staying in place while the notes change
 
-The notes are one document the AI rewrites wholesale, so a slide cannot be given a
-position that survives a rewrite. The design has four parts:
+The notes are stored as an ordered list of **blocks** — a heading, a paragraph, a list, a
+table, a code or `$$` math block each — and every block has a short key that is never
+reused. That makes a slide's position simple:
 
-1. **The notes stay clean.** Slides are never written into `note_content`, so the writer
+1. **The notes stay clean.** Slides are never written into the notes, so the writer
    cannot drop or mangle them and its prompts do not know they exist. The image markdown
    is added only when the notes are *returned* to the client.
-2. **Each included slide keeps an anchor:** the exact text of the line it follows, and the
-   nearest heading above it.
-3. **After every notes rewrite,** `resolve_anchors()` re-finds each anchor by plain string
-   match — no model. Only slides whose line disappeared, and slides never placed, go to
-   `place_slides()`.
-4. **Where an image lands** is snapped to the end of its block, so it never splits a code
-   fence, a `$$` math block, a table or a paragraph.
+2. **Each included slide remembers one block key:** the block it follows.
+3. **A block keeps its key when it is reworded.** When the model changes the notes, the new
+   document is matched block by block against the old one, and a block similar enough to an
+   old one inherits its key. So a slide only loses its spot when its block is **deleted** —
+   and only those slides, plus slides never placed, go to the model, which picks a block key.
+4. **Where an image lands** is right after its block. A block is a whole unit, so an image
+   can never split a code fence, a `$$` math block, a table or a paragraph.
 
 ```mermaid
 flowchart TD
-  R["notes rewritten<br/>(a turn with notes_updated)"] --> A["resolve_anchors()<br/>string match, no model"]
-  A --> K{"anchor line still there?"}
-  K -->|yes| KEEP["keep · update its line number"]
-  K -->|no, or never placed| O["orphan"]
-  O --> P["place_slides()<br/>one call, orphans only"]
-  P --> V{"a spot found?"}
+  R["notes changed"] --> K{"is the slide's block<br/>still in the notes?"}
+  K -->|yes| KEEP["stays put — no work"]
+  K -->|"no, or never placed"| O["orphan"]
+  O --> P["one placement call<br/>orphans only"]
+  P --> V{"a real block key?"}
   V -->|yes| PLACED["placed"]
-  V -->|no / the call failed| HID["hidden, retried next update"]
+  V -->|"no / the call failed"| HID["hidden, retried next update"]
 ```
+
+An earlier version anchored a slide to the exact text of a line, so rewording that line
+lost the slide and cost a model call to place it again.
 
 A placement failure is logged and swallowed. A slide problem never fails a turn that has
 already produced notes.
