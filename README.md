@@ -2,7 +2,7 @@
 
 https://github.com/user-attachments/assets/f66330b3-43a9-4ec4-86c0-4d80bcdea600
 
-Record a lecture and watch a notes document write itself.
+Record a lecture and Veda turns it into notes, which you keep shaping through a chat beside them.
 
 Speech is transcribed live, and on every message an AI decides whether it should change the notes, then changes only
 what it should. The notes are one evolving document per conversation, not a transcript and not a chat log: new

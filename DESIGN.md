@@ -33,14 +33,14 @@ number comes from an eval, the eval is named so it can be run again.
 
 ### How it works
 
-Veda turns a lecture into a set of notes, and keeps those notes up to date as the lecture goes on. A student records
-the lecture live, uploads a recording, or pastes text. Veda writes notes from it. The student can then talk to Veda in
+Veda turns a lecture into a set of notes, then keeps refining them as the student asks. A student records the
+lecture live, uploads a recording, or pastes text. When they send it, Veda writes notes from it. The student can then talk to Veda in
 a chat beside the notes: "add an example to the part on eigenvalues", "what did she mean by the second condition?",
 "make this shorter". Some of those messages should change the notes, and some should only get an answer.
 
 So each conversation has two things side by side: a **chat**, and **one living notes document** that the chat
 changes. Most AI note tools produce a summary once and stop. Veda's document is edited many times, by many messages,
-over a whole lecture or a whole course.
+over a whole course.
 
 ### Why it is hard
 
