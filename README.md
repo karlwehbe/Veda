@@ -1,6 +1,6 @@
 # Veda
 
-https://github.com/user-attachments/assets/7caa785c-76b3-4913-85aa-cdc69f299efb
+https://github.com/user-attachments/assets/273fe4c0-75a8-4b37-9843-b8f7cbc2a821
 
 Veda is an AI study assistant: you record a lecture, and it writes the study notes, places your slides in them, and
 changes them when you ask in the chat.
