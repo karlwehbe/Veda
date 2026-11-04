@@ -167,15 +167,6 @@ The person uploads a deck (PDF, PowerPoint, Keynote) and picks pages. Each slide
 
 ---
 
-## Accounts and security
-
-- **Invite only.** No public sign-up.
-- **Sessions** are random tokens in an `httponly` cookie, checked against the database, so they can be revoked at once.
-- **Someone else's data is a 404,** never a 403, so ids can't be probed. A test walks every route as a second user.
-- **Daily limits** on turns, tokens and audio minutes, summed from the usage records.
-
----
-
 ## Running it
 
 - **No job queue yet.** Turns run inside their request, and follow-up jobs run after the response. Request keys and
