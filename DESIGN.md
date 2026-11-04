@@ -19,7 +19,7 @@ What makes it hard:
 - **Long input.** An hour of lecture is about 14,000 tokens. Sending everything every time is slow and costly.
 - **Models make mistakes.** Asked to retype a document, a model can drop a section or invent a fact. Notes must stay
   trustworthy.
-- **Slow calls.** Notes from a long recording can take minutes, and the person may keep working meanwhile.
+- **Work in flight.** A turn waits seconds on the model, and the person may keep working meanwhile.
 - **Not every message is an edit.** "Thanks" must leave the notes alone; "yes, add it" must change them.
 
 ---
@@ -175,7 +175,7 @@ The person uploads a deck (PDF, PowerPoint, Keynote) and picks pages. Each slide
 - **Graceful shutdown** waits for replies in progress to finish (up to 11 minutes).
 - **Migrations** are Alembic files, run once before each deploy.
 - **Hosting:** the browser app on Vercel, the database and files on Supabase, the API in a container on a host that
-  allows 10-minute requests and long WebSockets.
+  allows long WebSockets and requests up to the turn's 10-minute cap (a worst case: most turns take seconds).
 
 ---
 
@@ -195,8 +195,9 @@ The person uploads a deck (PDF, PowerPoint, Keynote) and picks pages. Each slide
 
 ## What breaks first at scale
 
-1. **Long requests** that some hosts cut off. Fix: the job queue, and streaming replies.
-2. **Provider rate limits** when many lectures end at once. Fix: the queue, backoff, more providers.
+1. **Provider rate limits** when many lectures end at once. Fix: a job queue, backoff, more providers.
+2. **Slow turns inside the request.** Seconds normally, but a slow provider can stretch one toward the 10-minute cap,
+   which some hosts cut off. Fix: the same queue, and streaming replies.
 3. **Database connections and event-loop calls.** Fix: a connection pooler, and moving calls to threads.
 4. **Heavy audio and slide processing** in the web process. Fix: separate workers.
 5. **No trace of exact prompts and answers.** Fix: a tracing tool such as Langfuse.
