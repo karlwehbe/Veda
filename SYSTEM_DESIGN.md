@@ -29,10 +29,10 @@ Setup is in the [README](README.md). A shorter tour is in [DESIGN-PUBLIC.md](DES
 
 1. **Trustworthy notes.** An AI edit must never silently drop, change or invent content elsewhere in the notes.
 2. **No lost lectures.** A lecture can't be repeated, so a dropped connection or a closed tab must not lose audio.
-3. **Correct under slow work.** A turn can take minutes. The user may keep working meanwhile, and a retry must not do
-   the work (or bill it) twice.
+3. **Correct while work is in flight.** The user may press a button on the notes or restore a version while a turn
+   runs, and a retry must not do the work (or bill it) twice.
 4. **Low cost per user.** Model and speech costs grow with usage, so every call should send only what it needs.
-5. **Responsive enough.** Replies within seconds ( < 3s if no notes to be created).
+5. **Fast.** Replies and notes in seconds, even from a two-hour lecture.
 6. **Private.** A user can only ever reach their own data.
 
 The trade-off: **correctness over latency.** Waiting a few seconds longer is fine; damaged notes are not.
@@ -49,6 +49,7 @@ Only the numbers that shape the design:
 | Notes for one lecture | Tens of KB | Cheap to store whole as JSON and copy per version |
 | Versions kept | 50 per conversation | Full copies stay bounded (about 1–2 MB per conversation) |
 | Upload audio after conversion | ~14 MB per hour | Long files must be split before transcription |
+| A turn | ~5–10 s, even for a 2-hour lecture | Fine inside one HTTP request. The 10-minute cap is only a worst case |
 | Speech to text | ~$0.10–0.12 per hour | Speech is a real share of the cost: pick the cheaper provider per use |
 | Peak load | Many lectures end on the hour | Bursts of long AI calls: the first thing to queue at scale |
 
@@ -180,10 +181,11 @@ heading disappeared or the text shrank below 80%.
 
 ### 7.2 Concurrency during long turns (NFR 3)
 
-**Problem.** A turn can take minutes. Meanwhile the user may press a button on the notes or restore a version.
+**Problem.** A turn waits seconds on the model (and up to 10 minutes in the worst case). Meanwhile the user may press a
+button on the notes or restore a version.
 
-- **Lock for the whole turn?** Every other action would wait minutes, and holding a DB lock across an outside call is
-  a classic mistake.
+- **Lock for the whole turn?** Every other action would wait on the model, and holding a DB lock across an outside
+  call is a classic mistake.
 - **Last write wins?** Silently loses the other change.
 - **Chosen: optimistic concurrency.** The turn remembers the version it read and only locks the row while saving
   (`SELECT ... FOR NO KEY UPDATE`). Edits by key usually still apply on top of the newer notes; a full rewrite based on
@@ -279,16 +281,16 @@ All are visible and editable. Anything the user wrote or removed is never overwr
 
 | Bottleneck | Fix |
 | --- | --- |
-| Turns hold an HTTP request for minutes | A Postgres `jobs` table (`FOR UPDATE SKIP LOCKED`), status polling, streaming replies |
-| Provider rate limits when lectures end on the hour | The queue to smooth bursts, backoff, more providers |
+| Provider rate limits when lectures end on the hour | A Postgres `jobs` table (`FOR UPDATE SKIP LOCKED`) to smooth bursts, backoff, more providers |
+| A turn runs inside its HTTP request | Seconds normally, but a slow provider stretches it toward the 10-minute cap, which some hosts cut off. Same queue, plus streaming replies |
 | Database connections across many processes | A connection pooler, smaller pools |
 | Audio and slide conversion compete with requests | Separate workers |
 | Background jobs lost on restart | Same queue (request keys already make jobs safe to rerun) |
 | No trace of exact prompts and answers | A tracing tool such as Langfuse |
 
-Why not build the queue now: request keys prevent duplicates and graceful shutdown lets replies finish on deploys, so
-today a crash costs one resend. The queue becomes worth it when a host can't hold 10-minute requests or bursts hit rate
-limits.
+Why not build the queue now: turns finish in seconds, request keys prevent duplicates, and graceful shutdown lets
+replies finish on deploys, so today a crash costs one resend. The 10-minute cap only covers the worst case (several slow
+calls, a retry, the fallback model). The queue becomes worth it when bursts hit rate limits or slow turns become common.
 
 ---
 
