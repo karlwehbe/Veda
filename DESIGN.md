@@ -73,15 +73,17 @@ models are bad at exact line numbers and exact quotes, but good at copying a sho
 
 ```mermaid
 flowchart TD
-  M["Message"] --> K["Request key + daily limits"]
-  K --> S{"Source?"}
-  S -->|"recording / upload"| W["Ingestion: edits by key"]
-  S -->|"typed"| C["Chat: replies, may call tools"]
-  W --> V{"Edits valid?"}
-  C --> V
-  V -->|"yes"| SAVE["One transaction:<br/>notes, version, reply, usage"]
-  V -->|"no, twice"| FR["Checked full rewrite"] --> SAVE
-  SAVE --> BG["After the reply:<br/>slides, summary, memory, style"]
+    M["The student sends something:<br/>a recording, an upload or a typed message"] --> K["Check it isn't a repeat of an earlier send,<br/>and the daily limit isn't reached"]
+  K --> S{"Where did the text come from?"}
+  S -->|"a recording or an upload"| W["The model turns the lecture into edits to the notes<br/>(replace b3, insert after b4...)"]
+  S -->|"typed"| C["The chat model answers,<br/>and decides whether the notes should change"]
+  C -->|"just an answer"| SAVE
+  C -->|"the notes should change"| V
+  W --> V{"Code checks the edits:<br/>does every key exist?"}
+  V -->|"no, first time"| R["Ask the model again,<br/>telling it what was wrong"] --> V
+  V -->|"no, twice"| FR["Fall back to rewriting the whole notes,<br/>refused if content went missing"] --> SAVE
+  V -->|"yes"| SAVE["Save it all at once, or nothing:<br/>new notes version, reply, cost record"]
+  SAVE --> BG["After replying, in the background:<br/>place slides, update the chat summary,<br/>course memory and style habits"]
 ```
 
 - **Two flows, chosen by where the text came from,** never guessed from the words. A recording is folded into the
