@@ -32,7 +32,7 @@ Setup is in the [README](README.md). A shorter tour is in [DESIGN-PUBLIC.md](DES
 3. **Correct under slow work.** A turn can take minutes. The user may keep working meanwhile, and a retry must not do
    the work (or bill it) twice.
 4. **Low cost per user.** Model and speech costs grow with usage, so every call should send only what it needs.
-5. **Responsive enough.** Short replies in seconds; notes from a one-hour lecture within a couple of minutes.
+5. **Responsive enough.** Replies within seconds ( < 3s if no notes to be created).
 6. **Private.** A user can only ever reach their own data.
 
 The trade-off: **correctness over latency.** Waiting a few seconds longer is fine; damaged notes are not.
