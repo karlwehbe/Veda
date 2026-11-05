@@ -63,6 +63,35 @@ The model never retypes the notes. It answers with **edits that name keys**: rep
 - **A full rewrite is the last resort,** and it's refused if a heading disappears or the text shrinks below 80%.
 - **Every change is a version.** The last 50 are kept, and going back is instant.
 
+### In the database
+
+The whole list lives in one `jsonb` column of the conversation's row. Here the notes were started with `b1, b2, b3`,
+then `b2` was deleted, then `b4` was inserted after `b1`:
+
+`conversations`
+
+| id | title | note_blocks | note_next_key | note_revision |
+| --- | --- | --- | --- | --- |
+| c7 | Electrostatics | `[{"key":"b1","md":"# Electrostatics"}, {"key":"b4","md":"## Coulomb's law"}, {"key":"b3","md":"- Like charges repel."}]` | 5 | 3 |
+
+- **The array's order is the document's order,** so `b4` sits before `b3`. Keys are names, not positions.
+- **`note_next_key` only goes up.** `b2` is gone, but the next new block is `b5`, never `b2` again.
+- **`note_revision` points at the version shown.** Going back to version 2 just sets it to 2.
+
+`note_revisions`: a full copy of the blocks after each change (written here as keys only)
+
+| conversation_id | seq | kind | blocks |
+| --- | --- | --- | --- |
+| c7 | 1 | start | `b1, b2, b3` |
+| c7 | 2 | edit | `b1, b3` |
+| c7 | 3 | edit | `b1, b4, b3` |
+
+`slides`: a slide stores the key of the block it follows, so it stays put through any edit that keeps that block
+
+| id | conversation_id | page_number | anchor_block |
+| --- | --- | --- | --- |
+| s1 | c7 | 4 | `b4` |
+
 **Why not ask for the whole new document each time?** Models quietly change parts they shouldn't, output tokens are
 the expensive ones, and nothing could point into plain text. Diffs and search-and-replace were also considered:
 models are bad at exact line numbers and exact quotes, but good at copying a short key.
@@ -73,7 +102,7 @@ models are bad at exact line numbers and exact quotes, but good at copying a sho
 
 ```mermaid
 flowchart TD
-    M["The student sends something:<br/>a recording, an upload or a typed message"] --> K["Check it isn't a repeat of an earlier send,<br/>and the daily limit isn't reached"]
+  M["The student sends something:<br/>a recording, an upload or a typed message"] --> K["Check it isn't a repeat of an earlier send,<br/>and the daily limit isn't reached"]
   K --> S{"Where did the text come from?"}
   S -->|"a recording or an upload"| W["The model turns the lecture into edits to the notes<br/>(replace b3, insert after b4...)"]
   S -->|"typed"| C["The chat model answers,<br/>and decides whether the notes should change"]
@@ -202,4 +231,6 @@ The person uploads a deck (PDF, PowerPoint, Keynote) and picks pages. Each slide
    which some hosts cut off. Fix: the same queue, and streaming replies.
 3. **Database connections and event-loop calls.** Fix: a connection pooler, and moving calls to threads.
 4. **Heavy audio and slide processing** in the web process. Fix: separate workers.
+5. **No trace of exact prompts and answers.** Fix: a tracing tool such as Langfuse.
+
 5. **No trace of exact prompts and answers.** Fix: a tracing tool such as Langfuse.
